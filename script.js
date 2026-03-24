@@ -224,29 +224,45 @@ async function migrateLocalStorageIfNeeded() {
 
 // App boot — called once on page load
 async function bootApp() {
-    // 1. Init Supabase client
-    initSupabase();
-
+    console.log("🛠️ [DEBUG] bootApp dipanggil!");
+    
     // 2. Show loading overlay
     const overlay = document.getElementById('loading-overlay');
+    
+    // Force hide after 3 seconds as a safety fallback
+    setTimeout(() => {
+        if (overlay && overlay.style.display !== 'none') {
+            console.warn("⚠️ [DEBUG] Fallback trigger: Spinner disembunyikan paksa karena nyangkut!");
+            overlay.style.display = 'none';
+            _initApp(); // Coba render dashboard secara paksa
+        }
+    }, 3000);
 
     try {
+        console.log("🛠️ [DEBUG] Memulai initSupabase...");
+        initSupabase();
+        
+        console.log("🛠️ [DEBUG] Memulai migrasi (jika ada)...");
         // 3. Migrate localStorage data if this is the first run with Supabase
         await migrateLocalStorageIfNeeded();
 
+        console.log("🛠️ [DEBUG] Memuat data dari Supabase...");
         // 4. Load all data from Supabase (or keep defaultData if not configured yet)
         await loadAllData();
         
+        console.log("🛠️ [DEBUG] Menjalankan _initApp()...");
         // 5. Render app
         _initApp();
+        console.log("✅ [DEBUG] Semua selesai dengan sukses!");
     } catch(err) {
-        console.error('Boot error:', err);
+        console.error('❌ [DEBUG] Boot error terdeteksi:', err);
         // Fallback: use localStorage cache if Supabase fails
         const raw = localStorage.getItem(STORAGE_KEY);
         _cache = raw ? JSON.parse(raw) : defaultData;
         _initApp();
     } finally {
         if (overlay) overlay.style.display = 'none';
+        console.log("🛠️ [DEBUG] Overlay disembunyikan (finally).");
     }
 }
 
