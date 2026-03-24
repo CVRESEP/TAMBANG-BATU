@@ -40,25 +40,32 @@ function printLaporanPDF() {
 }
 
 // ============================================================
+// SUPABASE CONFIGURATION
+// ============================================================
+const SUPABASE_URL = 'https://fqdeoknsqgqtgnozknug.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZxZGVva25zcWdxdGdub3prbnVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzNTcyNDYsImV4cCI6MjA4OTkzMzI0Nn0.mcPWVWv6a3k8pKRLzjqKB3ZeH9_TYpWNyXnhYlvGAlc';
+let supabase = null;
+
+function initSupabase() {
+    if (typeof window.supabase === 'undefined') {
+        console.error('Supabase CDN belum dimuat!');
+        return false;
+    }
+    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    return true;
+}
+
+// ============================================================
 // State Management — Supabase-backed with in-memory cache
 // ============================================================
-const STORAGE_KEY = 'tambangBatuData';   // kept for migration only
+const STORAGE_KEY = 'tambangBatuData';
 const MIGRATION_KEY = 'tambangBatu_migrated';
 
+// TIDAK ADA DUMMY DATA (Sesuai Permintaan)
 const defaultData = {
-    buyers: [
-        { id: '1', name: 'PT Makmur Jaya', category: 'Proyek', address: 'Jl. Merdeka 10', unit: 'Ton', unitPrice: 150000 },
-        { id: '2', name: 'CV Bangun Sentosa', category: 'Umum', address: 'Jl. Sudirman 5', unit: 'Retase', unitPrice: 400000 }
-    ],
-    drivers: [
-        { id: '1', name: 'Budi Santoso', vehicleNumber: 'B 1234 CD', phone: '081234567890' },
-        { id: '2', name: 'Agus Pratama', vehicleNumber: 'D 5678 EF', phone: '089876543210' }
-    ],
-    expenseTypes: [
-        { id: '1', name: 'BBM', category: 'Operasional', nature: 'Pasti', unit: 'Liter', basePrice: 10000 },
-        { id: '2', name: 'Tiket Portal', category: 'Retribusi', nature: 'Pasti', unit: 'Hari', basePrice: 20000 },
-        { id: '3', name: 'Makan Sopir', category: 'Operasional', nature: 'Pasti', unit: 'Orang', basePrice: 25000 }
-    ],
+    buyers: [],
+    drivers: [],
+    expenseTypes: [],
     settlements: [],
     deductions: [],
     transactions: []
@@ -72,10 +79,15 @@ function getData() {
     return _cache || defaultData;
 }
 
-// Synchronous cache writer — ALSO persists to Supabase in the background
+// Synchronous cache writer — ALSO persists to Supabase AND LocalStorage
 function saveData(data) {
     _cache = data;
-    // Persist full state async (fire-and-forget per table)
+    // Always save to localStorage as a safety net
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch(e) { console.error('LocalStorage save error:', e); }
+    
+    // Persist full state async (fire-and-forget)
     if (supabase) {
         _syncCacheToSupabase(data).catch(e => console.error('Supabase sync error:', e));
     }
