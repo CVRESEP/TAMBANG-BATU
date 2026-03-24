@@ -352,7 +352,11 @@ function _initApp() {
 }
 
 // Boot the app when the DOM is ready
-document.addEventListener('DOMContentLoaded', bootApp);
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootApp);
+} else {
+    bootApp();
+}
 
 // ==========================================
 // RENDER FUNCTIONS FOR PAGES
