@@ -40,28 +40,11 @@ function printLaporanPDF() {
 }
 
 // ============================================================
-// SUPABASE CONFIGURATION
-// ============================================================
-const SUPABASE_URL = 'https://fqdeoknsqgqtgnozknug.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZxZGVva25zcWdxdGdub3prbnVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzNTcyNDYsImV4cCI6MjA4OTkzMzI0Nn0.mcPWVWv6a3k8pKRLzjqKB3ZeH9_TYpWNyXnhYlvGAlc';
-let supabase = null;
-
-function initSupabase() {
-    if (typeof window.supabase === 'undefined') {
-        console.error('Supabase CDN belum dimuat!');
-        return false;
-    }
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    return true;
-}
-
-// ============================================================
 // State Management — Supabase-backed with in-memory cache
 // ============================================================
-const STORAGE_KEY = 'tambangBatuData';
+const STORAGE_KEY = 'tambangBatuData';   // kept for migration only
 const MIGRATION_KEY = 'tambangBatu_migrated';
 
-// TIDAK ADA DUMMY DATA (Sesuai Permintaan)
 const defaultData = {
     buyers: [],
     drivers: [],
@@ -79,15 +62,10 @@ function getData() {
     return _cache || defaultData;
 }
 
-// Synchronous cache writer — ALSO persists to Supabase AND LocalStorage
+// Synchronous cache writer — ALSO persists to Supabase in the background
 function saveData(data) {
     _cache = data;
-    // Always save to localStorage as a safety net
-    try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch(e) { console.error('LocalStorage save error:', e); }
-    
-    // Persist full state async (fire-and-forget)
+    // Persist full state async (fire-and-forget per table)
     if (supabase) {
         _syncCacheToSupabase(data).catch(e => console.error('Supabase sync error:', e));
     }
@@ -206,7 +184,7 @@ async function loadAllData() {
 // Full sync: push entire cache to Supabase (used by saveData)
 async function _syncCacheToSupabase(data) {
     if (!supabase) return;
-    await Promise.all([
+    const results = await Promise.all([
         supabase.from('buyers').upsert(data.buyers.map(buyerToRow), { onConflict: 'id' }),
         supabase.from('drivers').upsert(data.drivers.map(driverToRow), { onConflict: 'id' }),
         supabase.from('expense_types').upsert(data.expenseTypes.map(expenseTypeToRow), { onConflict: 'id' }),
@@ -214,6 +192,15 @@ async function _syncCacheToSupabase(data) {
         supabase.from('settlements').upsert(data.settlements.map(settlementToRow), { onConflict: 'id' }),
         supabase.from('deductions').upsert(data.deductions.map(deductionToRow), { onConflict: 'id' })
     ]);
+    
+    // Debugging errors if any
+    const tableNames = ['buyers', 'drivers', 'expense_types', 'transactions', 'settlements', 'deductions'];
+    results.forEach((res, i) => {
+        if (res.error) {
+            console.error(`🚨 Error nyimpen ke tabel ${tableNames[i]}:`, res.error);
+            alert(`Gagal simpan ke tabel ${tableNames[i]}:\n${res.error.message}`);
+        }
+    });
 }
 
 // One-time migration from localStorage to Supabase
