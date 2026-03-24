@@ -40,10 +40,9 @@ function printLaporanPDF() {
 }
 
 // ============================================================
-// State Management — Supabase-backed with in-memory cache
+// State Management — Pure Local Storage
 // ============================================================
-const STORAGE_KEY = 'tambangBatuData';   // kept for migration only
-const MIGRATION_KEY = 'tambangBatu_migrated';
+const STORAGE_KEY = 'tambangBatuData';
 
 const defaultData = {
     buyers: [],
@@ -54,214 +53,51 @@ const defaultData = {
     transactions: []
 };
 
-// In-memory cache — the rest of the app reads/writes through getData()/saveData()
 let _cache = null;
 
-// Synchronous cache accessor (same API as before)
 function getData() {
-    return _cache || defaultData;
+    if (!_cache) {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+            try {
+                _cache = JSON.parse(raw);
+            } catch(e) {
+                console.error("Gagal membaca localStorage", e);
+                _cache = JSON.parse(JSON.stringify(defaultData));
+            }
+        } else {
+            _cache = JSON.parse(JSON.stringify(defaultData));
+        }
+    }
+    return _cache;
 }
 
-// Synchronous cache writer — ALSO persists to Supabase in the background
 function saveData(data) {
     _cache = data;
-    // Persist full state async (fire-and-forget per table)
-    if (supabase) {
-        _syncCacheToSupabase(data).catch(e => console.error('Supabase sync error:', e));
-    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-// updateData helper (unchanged API)
 function updateData(key, newArray) {
     const data = getData();
     data[key] = newArray;
     saveData(data);
 }
 
-// ---- Supabase helpers ----
-
-// Map JS camelCase keys → Supabase snake_case columns
-function buyerToRow(b) {
-    return { id: b.id, name: b.name, category: b.category || '', address: b.address || '', unit: b.unit || '', unit_price: b.unitPrice || 0 };
-}
-function rowToBuyer(r) {
-    return { id: r.id, name: r.name, category: r.category, address: r.address, unit: r.unit, unitPrice: r.unit_price };
-}
-
-function driverToRow(d) {
-    return { id: d.id, name: d.name, vehicle_number: d.vehicleNumber || '', phone: d.phone || '' };
-}
-function rowToDriver(r) {
-    return { id: r.id, name: r.name, vehicleNumber: r.vehicle_number, phone: r.phone };
-}
-
-function expenseTypeToRow(e) {
-    return { id: e.id, name: e.name, category: e.category || '', nature: e.nature || '', unit: e.unit || '', base_price: e.basePrice || 0 };
-}
-function rowToExpenseType(r) {
-    return { id: r.id, name: r.name, category: r.category, nature: r.nature, unit: r.unit, basePrice: r.base_price };
-}
-
-function transactionToRow(tx) {
-    return {
-        id: tx.id,
-        date: tx.date,
-        total_amount: tx.totalAmount || 0,
-        operational_expense: tx.operationalExpense || 0,
-        retribution_expense: tx.retributionExpense || 0,
-        sales: tx.sales || [],
-        expense_details: tx.expenseDetails || [],
-        status: tx.status || 'Belum Lunas'
-    };
-}
-function rowToTransaction(r) {
-    return {
-        id: r.id,
-        date: r.date,
-        totalAmount: r.total_amount,
-        operationalExpense: r.operational_expense,
-        retributionExpense: r.retribution_expense,
-        sales: r.sales || [],
-        expenseDetails: r.expense_details || [],
-        status: r.status,
-        createdAt: r.created_at
-    };
-}
-
-function settlementToRow(s) {
-    return { id: s.id, expense_type_id: s.expenseTypeId || '' };
-}
-function rowToSettlement(r) {
-    return { id: r.id, expenseTypeId: r.expense_type_id };
-}
-
-function deductionToRow(d) {
-    return {
-        id: d.id,
-        buyer_id: d.buyerId || '',
-        date: d.date || null,
-        date_start: d.dateStart || null,
-        date_end: d.dateEnd || null,
-        jenis: d.jenis || '',
-        description: d.description || '',
-        amount: d.amount || 0
-    };
-}
-function rowToDeduction(r) {
-    return {
-        id: r.id,
-        buyerId: r.buyer_id,
-        date: r.date,
-        dateStart: r.date_start,
-        dateEnd: r.date_end,
-        jenis: r.jenis,
-        description: r.description,
-        amount: r.amount
-    };
-}
-
-// Load all tables in parallel, build cache
-async function loadAllData() {
-    if (!supabase) { _cache = defaultData; return; }
-    const [b, d, e, tx, s, ded] = await Promise.all([
-        supabase.from('buyers').select('*'),
-        supabase.from('drivers').select('*'),
-        supabase.from('expense_types').select('*'),
-        supabase.from('transactions').select('*').order('date', { ascending: false }),
-        supabase.from('settlements').select('*'),
-        supabase.from('deductions').select('*').order('created_at', { ascending: false })
-    ]);
-    _cache = {
-        buyers:       (b.data   || []).map(rowToBuyer),
-        drivers:      (d.data   || []).map(rowToDriver),
-        expenseTypes: (e.data   || []).map(rowToExpenseType),
-        transactions: (tx.data  || []).map(rowToTransaction),
-        settlements:  (s.data   || []).map(rowToSettlement),
-        deductions:   (ded.data || []).map(rowToDeduction)
-    };
-}
-
-// Full sync: push entire cache to Supabase (used by saveData)
-async function _syncCacheToSupabase(data) {
-    if (!supabase) return;
-    const results = await Promise.all([
-        supabase.from('buyers').upsert(data.buyers.map(buyerToRow), { onConflict: 'id' }),
-        supabase.from('drivers').upsert(data.drivers.map(driverToRow), { onConflict: 'id' }),
-        supabase.from('expense_types').upsert(data.expenseTypes.map(expenseTypeToRow), { onConflict: 'id' }),
-        supabase.from('transactions').upsert(data.transactions.map(transactionToRow), { onConflict: 'id' }),
-        supabase.from('settlements').upsert(data.settlements.map(settlementToRow), { onConflict: 'id' }),
-        supabase.from('deductions').upsert(data.deductions.map(deductionToRow), { onConflict: 'id' })
-    ]);
-    
-    // Debugging errors if any
-    const tableNames = ['buyers', 'drivers', 'expense_types', 'transactions', 'settlements', 'deductions'];
-    results.forEach((res, i) => {
-        if (res.error) {
-            console.error(`🚨 Error nyimpen ke tabel ${tableNames[i]}:`, res.error);
-            alert(`Gagal simpan ke tabel ${tableNames[i]}:\n${res.error.message}`);
-        }
-    });
-}
-
-// One-time migration from localStorage to Supabase
-async function migrateLocalStorageIfNeeded() {
-    if (!supabase) return;
-    if (localStorage.getItem(MIGRATION_KEY)) return;   // already done
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    try {
-        const local = JSON.parse(raw);
-        const anyData = (local.transactions || []).length > 0 || (local.buyers || []).length > 2;
-        if (!anyData) return;
-        console.log('Migrasi data localStorage → Supabase...');
-        _cache = { ...defaultData, ...local };
-        await _syncCacheToSupabase(_cache);
-        localStorage.setItem(MIGRATION_KEY, '1');
-        console.log('Migrasi selesai!');
-    } catch(e) { console.error('Migrasi gagal:', e); }
-}
-
 // App boot — called once on page load
-async function bootApp() {
-    console.log("🛠️ [DEBUG] bootApp dipanggil!");
+function bootApp() {
+    console.log("🛠️ [DEBUG] bootApp dipanggil (Mode Lokal)!");
     
-    // 2. Show loading overlay
+    // Ensure cache is loaded
+    getData();
+    
     const overlay = document.getElementById('loading-overlay');
-    
-    // Force hide after 3 seconds as a safety fallback
-    setTimeout(() => {
-        if (overlay && overlay.style.display !== 'none') {
-            console.warn("⚠️ [DEBUG] Fallback trigger: Spinner disembunyikan paksa karena nyangkut!");
-            overlay.style.display = 'none';
-            _initApp(); // Coba render dashboard secara paksa
-        }
-    }, 3000);
-
     try {
-        console.log("🛠️ [DEBUG] Memulai initSupabase...");
-        initSupabase();
-        
-        console.log("🛠️ [DEBUG] Memulai migrasi (jika ada)...");
-        // 3. Migrate localStorage data if this is the first run with Supabase
-        await migrateLocalStorageIfNeeded();
-
-        console.log("🛠️ [DEBUG] Memuat data dari Supabase...");
-        // 4. Load all data from Supabase (or keep defaultData if not configured yet)
-        await loadAllData();
-        
-        console.log("🛠️ [DEBUG] Menjalankan _initApp()...");
-        // 5. Render app
         _initApp();
-        console.log("✅ [DEBUG] Semua selesai dengan sukses!");
     } catch(err) {
-        console.error('❌ [DEBUG] Boot error terdeteksi:', err);
-        // Fallback: use localStorage cache if Supabase fails
-        const raw = localStorage.getItem(STORAGE_KEY);
-        _cache = raw ? JSON.parse(raw) : defaultData;
-        _initApp();
+        console.error('Boot error:', err);
     } finally {
         if (overlay) overlay.style.display = 'none';
-        console.log("🛠️ [DEBUG] Overlay disembunyikan (finally).");
+        console.log("✅ [DEBUG] Overlay disembunyikan. App siap digunakan secara lokal.");
     }
 }
 
@@ -288,7 +124,7 @@ function _initApp() {
     const pages = document.querySelectorAll('.page');
     const pageTitle = document.getElementById('page-title');
 
-    window.navigateTo = function(targetId) {
+    window.navigateTo = function (targetId) {
         pages.forEach(page => page.classList.remove('active'));
         navLinks.forEach(link => link.classList.remove('active'));
         const targetPage = document.getElementById(targetId);
@@ -316,7 +152,7 @@ function _initApp() {
     const formModal = document.getElementById('form-modal');
     const btnCloseModal = document.getElementById('btn-close-modal');
 
-    window.openModal = function(title, contentHtml) {
+    window.openModal = function (title, contentHtml) {
         document.getElementById('modal-title').textContent = title;
         const body = document.getElementById('modal-body-content');
         body.innerHTML = contentHtml;
@@ -325,7 +161,7 @@ function _initApp() {
         setTimeout(() => focusFirstInput(body), 50);
     };
 
-    window.closeModal = function() {
+    window.closeModal = function () {
         modalOverlay.classList.remove('active');
         formModal.classList.remove('active');
     };
@@ -342,7 +178,7 @@ function _initApp() {
 
     btnCloseModal.addEventListener('click', closeModal);
     modalOverlay.addEventListener('click', (e) => {
-        if(e.target === modalOverlay) closeModal();
+        if (e.target === modalOverlay) closeModal();
     });
 
     // Initial load: Dashboard
@@ -361,7 +197,7 @@ function _initApp() {
     }
 
     const sType = document.getElementById('filter-setoran-type');
-    if(sType) {
+    if (sType) {
         sType.addEventListener('change', () => render_potongan_page());
     }
 }
@@ -382,30 +218,30 @@ window.render_dashboard = () => {
     const data = getData();
     document.getElementById('stat-buyers').textContent = data.buyers.length;
     document.getElementById('stat-drivers').textContent = data.drivers.length;
-    
+
     // Calculate total transactions
     const totalSales = data.transactions.reduce((sum, tr) => sum + tr.totalAmount, 0);
     const totalExpense = data.transactions.reduce((sum, tr) => sum + (tr.operationalExpense || 0) + (tr.retributionExpense || 0), 0);
-    
+
     document.getElementById('stat-sales').textContent = formatCurrency(totalSales);
     document.getElementById('stat-expense').textContent = formatCurrency(totalExpense);
-    
+
     // Render Recent Transactions
     const tbody = document.getElementById('tbody-recent');
     tbody.innerHTML = '';
-    
+
     if (data.transactions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Belum ada transaksi</td></tr>';
         return;
     }
-    
+
     // Get last 5 transactions
     const recentTx = [...data.transactions].reverse().slice(0, 5);
-    
+
     recentTx.forEach(tx => {
         const buyer = data.buyers.find(b => b.id === tx.buyerId);
         const driver = data.drivers.find(d => d.id === tx.driverId);
-        
+
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td>${formatDate(tx.date)}</td>
@@ -422,12 +258,12 @@ window.render_pembeli = () => {
     const data = getData();
     const tbody = document.getElementById('tbody-pembeli');
     tbody.innerHTML = '';
-    
+
     if (data.buyers.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Belum ada data pembeli</td></tr>';
         return;
     }
-    
+
     data.buyers.forEach(buyer => {
         const tr = document.createElement('tr');
         const badgeColor = buyer.category === 'Proyek' ? 'var(--success)' : 'var(--primary-color)';
@@ -453,12 +289,12 @@ window.render_sopir = () => {
     const data = getData();
     const tbody = document.getElementById('tbody-sopir');
     tbody.innerHTML = '';
-    
+
     if (data.drivers.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Belum ada data sopir</td></tr>';
         return;
     }
-    
+
     data.drivers.forEach(driver => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -477,20 +313,20 @@ window.render_sopir = () => {
 };
 
 window.render_pengeluaran = () => {
-     const data = getData();
+    const data = getData();
     const tbody = document.getElementById('tbody-pengeluaran');
     tbody.innerHTML = '';
-    
+
     if (data.expenseTypes.length === 0) {
         tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">Belum ada data jenis pengeluaran</td></tr>';
         return;
     }
-    
+
     data.expenseTypes.forEach(exp => {
         const tr = document.createElement('tr');
         const natureColor = exp.nature === 'Pasti' ? 'var(--success)' : 'var(--danger)';
         const natureBg = exp.nature === 'Pasti' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)';
-        
+
         tr.innerHTML = `
             <td><strong>${exp.name}</strong></td>
             <td><span style="display:inline-block; padding:0.25rem 0.5rem; border-radius:1rem; font-size:0.75rem; background:${exp.category === 'Operasional' ? 'rgba(79, 70, 229, 0.1)' : 'rgba(245, 158, 11, 0.1)'}; color:${exp.category === 'Operasional' ? 'var(--primary-color)' : 'var(--warning)'}">${exp.category}</span></td>
@@ -516,7 +352,7 @@ window.render_potongan = () => {
 
     // Populate Type Filter if empty
     const sType = document.getElementById('filter-setoran-type');
-    if(sType && sType.options.length <= 1) {
+    if (sType && sType.options.length <= 1) {
         data.expenseTypes.forEach(e => {
             const opt = document.createElement('option');
             opt.value = e.id;
@@ -532,7 +368,7 @@ window.render_potongan = () => {
 
 window.render_setoran_summary = (data, start, end) => {
     const container = document.getElementById('setoran-summary-content');
-    if(!container) return;
+    if (!container) return;
 
     // Aggregation (Same logic as generateLaporan)
     let totalHargaBatu = 0;
@@ -582,10 +418,10 @@ window.render_setoran_summary = (data, start, end) => {
 
 window.render_setoran_table = (data, start, end, typeId = '') => {
     const tbody = document.getElementById('tbody-setoran');
-    if(!tbody) return;
+    if (!tbody) return;
 
     let filtered = (data.settlements || []);
-    if(typeId) {
+    if (typeId) {
         filtered = filtered.filter(s => s.expenseTypeId === typeId);
     }
 
@@ -593,13 +429,13 @@ window.render_setoran_table = (data, start, end, typeId = '') => {
     const uniqueTypes = [];
     const seen = new Set();
     filtered.forEach(s => {
-        if(!seen.has(s.expenseTypeId)) {
+        if (!seen.has(s.expenseTypeId)) {
             uniqueTypes.push(s);
             seen.add(s.expenseTypeId);
         }
     });
 
-    tbody.innerHTML = uniqueTypes.length === 0 ? '<tr><td colspan="2" class="text-center">Belum ada jenis setoran terdaftar</td></tr>' : 
+    tbody.innerHTML = uniqueTypes.length === 0 ? '<tr><td colspan="2" class="text-center">Belum ada jenis setoran terdaftar</td></tr>' :
         uniqueTypes.map(s => {
             const expType = data.expenseTypes.find(e => e.id === s.expenseTypeId);
             return `
@@ -615,19 +451,19 @@ window.render_setoran_table = (data, start, end, typeId = '') => {
 
 window.render_potongan_table = (data, start, end) => {
     const tbody = document.getElementById('tbody-potongan');
-    if(!tbody) return;
+    if (!tbody) return;
 
     let filtered = (data.deductions || []);
-    if(start && end) {
+    if (start && end) {
         filtered = filtered.filter(p => {
             const pStart = p.dateStart || p.date;
             const pEnd = p.dateEnd || p.date;
             return pStart <= end && pEnd >= start;
         });
     }
-    filtered.sort((a,b) => new Date(b.dateStart || b.date) - new Date(a.dateStart || a.date));
+    filtered.sort((a, b) => new Date(b.dateStart || b.date) - new Date(a.dateStart || a.date));
 
-    tbody.innerHTML = filtered.length === 0 ? '<tr><td colspan="5" class="text-center">Tidak ada data potongan</td></tr>' : 
+    tbody.innerHTML = filtered.length === 0 ? '<tr><td colspan="5" class="text-center">Tidak ada data potongan</td></tr>' :
         filtered.map(p => {
             const buyer = data.buyers.find(b => b.id === p.buyerId);
             const dateStr = p.dateStart && p.dateEnd ? `${formatDate(p.dateStart)} - ${formatDate(p.dateEnd)}` : formatDate(p.date);
@@ -693,7 +529,7 @@ document.getElementById('btn-add-pembeli').addEventListener('click', () => {
         </form>
     `;
     openModal('Tambah Pembeli', formHtml);
-    
+
     document.getElementById('form-pembeli').addEventListener('submit', (e) => {
         e.preventDefault();
         savePembeli();
@@ -705,7 +541,7 @@ window.editPembeli = (id) => {
     const data = getData();
     const buyer = data.buyers.find(b => b.id === id);
     if (!buyer) return;
-    
+
     const formHtml = `
         <form id="form-pembeli" autocomplete="off">
             <div class="form-group">
@@ -742,7 +578,7 @@ window.editPembeli = (id) => {
         </form>
     `;
     openModal('Edit Pembeli', formHtml);
-    
+
     document.getElementById('form-pembeli').addEventListener('submit', (e) => {
         e.preventDefault();
         savePembeli();
@@ -755,9 +591,9 @@ function savePembeli() {
     const address = document.getElementById('pembeli-address').value;
     const unit = document.getElementById('pembeli-unit').value;
     const unitPrice = parseFloat(document.getElementById('pembeli-price').value);
-    
+
     const data = getData();
-    
+
     if (currentEditId) {
         const index = data.buyers.findIndex(b => b.id === currentEditId);
         if (index > -1) {
@@ -766,14 +602,14 @@ function savePembeli() {
     } else {
         data.buyers.push({ id: generateId(), name, category, address, unit, unitPrice });
     }
-    
+
     saveData(data);
     closeModal();
     render_pembeli();
 }
 
 window.deletePembeli = (id) => {
-    if(confirm('Apakah Anda yakin ingin menghapus data pembeli ini?')) {
+    if (confirm('Apakah Anda yakin ingin menghapus data pembeli ini?')) {
         const data = getData();
         data.buyers = data.buyers.filter(b => b.id !== id);
         saveData(data);
@@ -805,7 +641,7 @@ document.getElementById('btn-add-sopir').addEventListener('click', () => {
         </form>
     `;
     openModal('Tambah Sopir', formHtml);
-    
+
     document.getElementById('form-sopir').addEventListener('submit', (e) => {
         e.preventDefault();
         saveSopir();
@@ -817,7 +653,7 @@ window.editSopir = (id) => {
     const data = getData();
     const driver = data.drivers.find(d => d.id === id);
     if (!driver) return;
-    
+
     const formHtml = `
         <form id="form-sopir" autocomplete="off">
             <div class="form-group">
@@ -839,7 +675,7 @@ window.editSopir = (id) => {
         </form>
     `;
     openModal('Edit Sopir', formHtml);
-    
+
     document.getElementById('form-sopir').addEventListener('submit', (e) => {
         e.preventDefault();
         saveSopir();
@@ -850,9 +686,9 @@ function saveSopir() {
     const name = document.getElementById('sopir-name').value;
     const vehicleNumber = document.getElementById('sopir-vehicle').value;
     const phone = document.getElementById('sopir-phone').value;
-    
+
     const data = getData();
-    
+
     if (currentEditId) {
         const index = data.drivers.findIndex(d => d.id === currentEditId);
         if (index > -1) {
@@ -861,14 +697,14 @@ function saveSopir() {
     } else {
         data.drivers.push({ id: generateId(), name, vehicleNumber, phone });
     }
-    
+
     saveData(data);
     closeModal();
     render_sopir();
 }
 
 window.deleteSopir = (id) => {
-    if(confirm('Apakah Anda yakin ingin menghapus data sopir ini?')) {
+    if (confirm('Apakah Anda yakin ingin menghapus data sopir ini?')) {
         const data = getData();
         data.drivers = data.drivers.filter(d => d.id !== id);
         saveData(data);
@@ -914,7 +750,7 @@ document.getElementById('btn-add-pengeluaran').addEventListener('click', () => {
         </form>
     `;
     openModal('Tambah Jenis Pengeluaran', formHtml);
-    
+
     document.getElementById('form-pengeluaran').addEventListener('submit', (e) => {
         e.preventDefault();
         savePengeluaran();
@@ -926,7 +762,7 @@ window.editPengeluaran = (id) => {
     const data = getData();
     const exp = data.expenseTypes.find(e => e.id === id);
     if (!exp) return;
-    
+
     const formHtml = `
         <form id="form-pengeluaran" autocomplete="off">
             <div class="form-group">
@@ -962,7 +798,7 @@ window.editPengeluaran = (id) => {
         </form>
     `;
     openModal('Edit Jenis Pengeluaran', formHtml);
-    
+
     document.getElementById('form-pengeluaran').addEventListener('submit', (e) => {
         e.preventDefault();
         savePengeluaran();
@@ -975,9 +811,9 @@ function savePengeluaran() {
     const nature = document.getElementById('pengeluaran-nature').value;
     const unit = document.getElementById('pengeluaran-unit').value;
     const basePrice = parseFloat(document.getElementById('pengeluaran-price').value) || 0;
-    
+
     const data = getData();
-    
+
     if (currentEditId) {
         const index = data.expenseTypes.findIndex(e => e.id === currentEditId);
         if (index > -1) {
@@ -986,14 +822,14 @@ function savePengeluaran() {
     } else {
         data.expenseTypes.push({ id: generateId(), name, category, nature, unit, basePrice });
     }
-    
+
     saveData(data);
     closeModal();
     render_pengeluaran();
 }
 
 window.deletePengeluaran = (id) => {
-    if(confirm('Apakah Anda yakin ingin menghapus jenis pengeluaran ini?')) {
+    if (confirm('Apakah Anda yakin ingin menghapus jenis pengeluaran ini?')) {
         const data = getData();
         data.expenseTypes = data.expenseTypes.filter(e => e.id !== id);
         saveData(data);
@@ -1010,14 +846,14 @@ document.getElementById('btn-add-setoran-2')?.addEventListener('click', () => ad
 document.getElementById('btn-add-potongan').addEventListener('click', () => {
     const pageStart = document.getElementById('filter-potongan-start').value;
     const pageEnd = document.getElementById('filter-potongan-end').value;
-    
+
     bulkPotRows = []; // Start empty
     openBulkPotonganModal(pageStart, pageEnd);
 });
 
 function openBulkPotonganModal(start, end) {
     const data = getData();
-    
+
     // Calculate potential sales for the dropdown
     const salesSummary = {};
     data.transactions
@@ -1100,7 +936,7 @@ function openBulkPotonganModal(start, end) {
             </div>
         </div>
     `;
-    
+
     openModal('Tambah Potongan', formHtml);
 }
 
@@ -1113,18 +949,18 @@ window.refreshBulkModal = () => {
 window.addBulkRowFromLookup = () => {
     const select = document.getElementById('bulk-lookup-select');
     if (!select.value) return;
-    
+
     const amount = parseFloat(select.options[select.selectedIndex].dataset.amount) || 0;
     const bid = select.value;
     const bName = select.options[select.selectedIndex].text.split(' - ')[0];
-    
+
     bulkPotRows.push({
         id: generateId(),
         buyerId: bid,
         amount: amount,
         description: `Potongan Penjualan ${bName}`
     });
-    
+
     window.refreshBulkModal();
 };
 
@@ -1150,9 +986,9 @@ function saveBulkPotongan() {
     const data = getData();
     const start = document.getElementById('bulk-date-start').value;
     const end = document.getElementById('bulk-date-end').value;
-    
+
     if (!data.deductions) data.deductions = [];
-    
+
     let added = 0;
     bulkPotRows.forEach(row => {
         if (row.amount > 0) {
@@ -1168,12 +1004,12 @@ function saveBulkPotongan() {
             added++;
         }
     });
-    
+
     if (added === 0) {
         alert('Tidak ada jumlah potongan yang diisi.');
         return;
     }
-    
+
     saveData(data);
     closeModal();
     render_potongan();
@@ -1184,7 +1020,7 @@ window.openAddPotonganForBuyer = (buyerId, date) => {
     currentEditId = null;
     const data = getData();
     const buyerOptions = data.buyers.map(b => `<option value="${b.id}" ${b.id === buyerId ? 'selected' : ''}>${b.name}</option>`).join('');
-    
+
     const formHtml = `
         <form id="form-potongan" autocomplete="off">
             <div class="form-group">
@@ -1241,7 +1077,7 @@ window.editPotongan = (id) => {
     if (!data.deductions) data.deductions = [];
     const pot = data.deductions.find(p => p.id === id);
     if (!pot) return;
-    
+
     const buyerOptions = data.buyers.map(b => `<option value="${b.id}" ${b.id === pot.buyerId ? 'selected' : ''}>${b.name}</option>`).join('');
 
     const formHtml = `
@@ -1301,15 +1137,15 @@ function savePotongan() {
     const dateEnd = document.getElementById('potongan-date-end').value;
     const description = document.getElementById('potongan-desc').value;
     const amount = parseFloat(document.getElementById('potongan-amount').value) || 0;
-    
+
     if (dateEnd < dateStart) {
         alert('Sampai Tanggal tidak boleh lebih awal dari Dari Tanggal.');
         return;
     }
-    
+
     const data = getData();
     if (!data.deductions) data.deductions = [];
-    
+
     const potData = { jenis, buyerId, dateStart, dateEnd, description, amount };
 
     if (currentEditId) {
@@ -1320,14 +1156,14 @@ function savePotongan() {
     } else {
         data.deductions.push({ id: generateId(), ...potData });
     }
-    
+
     saveData(data);
     closeModal();
     render_potongan();
 }
 
 window.deletePotongan = (id) => {
-    if(confirm('Apakah Anda yakin ingin menghapus data potongan ini?')) {
+    if (confirm('Apakah Anda yakin ingin menghapus data potongan ini?')) {
         const data = getData();
         data.deductions = data.deductions.filter(p => p.id !== id);
         saveData(data);
@@ -1340,7 +1176,7 @@ window.addSetoran = () => openSetoranModal();
 window.editSetoran = (id) => {
     const data = getData();
     const item = data.settlements?.find(s => s.id === id);
-    if(item) openSetoranModal(item);
+    if (item) openSetoranModal(item);
 };
 
 window.openSetoranModal = (item = null) => {
@@ -1372,14 +1208,14 @@ window.openSetoranModal = (item = null) => {
 
 window.saveSetoran = (id) => {
     const expenseTypeId = document.getElementById('setoran-expense-id').value;
-    if(!expenseTypeId) return;
-    
+    if (!expenseTypeId) return;
+
     const data = getData();
-    if(!data.settlements) data.settlements = [];
-    
+    if (!data.settlements) data.settlements = [];
+
     // Prevent duplicate
     const exists = data.settlements.some(s => s.expenseTypeId === expenseTypeId);
-    if(exists && !id) {
+    if (exists && !id) {
         alert('Jenis setoran ini sudah terdaftar.');
         return;
     }
@@ -1390,14 +1226,14 @@ window.saveSetoran = (id) => {
     } else {
         data.settlements.push({ id: generateId(), expenseTypeId });
     }
-    
+
     saveData(data);
     closeModal();
     render_potongan();
 };
 
 window.deleteSetoran = (id) => {
-    if(confirm('Hapus data setoran ini?')) {
+    if (confirm('Hapus data setoran ini?')) {
         const data = getData();
         data.settlements = data.settlements.filter(s => s.id !== id);
         saveData(data);
@@ -1415,30 +1251,30 @@ let retExpenseRows = [];
 
 window.render_penjualan = () => {
     const data = getData();
-    
+
     // Ensure base pricing for expenses
     let modified = false;
     data.expenseTypes.forEach(e => {
-        if(e.basePrice === undefined) {
+        if (e.basePrice === undefined) {
             e.basePrice = 0;
             modified = true;
         }
     });
-    if(modified) saveData(data);
+    if (modified) saveData(data);
 
     // Setup views
     const listView = document.getElementById('penjualan-list-view');
     const formView = document.getElementById('penjualan-form-view');
     const tbodyList = document.getElementById('tbody-penjualan-list');
     const formContainer = document.getElementById('penjualan-form-container');
-    
+
     // Switch to List View
     listView.style.display = 'block';
     formView.style.display = 'none';
-    
+
     // Render List
     tbodyList.innerHTML = '';
-    if(data.transactions.length === 0) {
+    if (data.transactions.length === 0) {
         tbodyList.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Belum ada transaksi</td></tr>';
     } else {
         data.transactions.forEach(tx => {
@@ -1450,9 +1286,9 @@ window.render_penjualan = () => {
             }
 
             const netProfit = tx.totalAmount - (tx.operationalExpense || 0) - (tx.retributionExpense || 0);
-            
+
             const tr = document.createElement('tr');
-            
+
             // Get first buyerId for the shortcut (if complex, just use first)
             const firstBuyerId = (tx.sales && tx.sales.length > 0) ? tx.sales[0].buyerId : null;
 
@@ -1495,25 +1331,25 @@ window.render_penjualan = () => {
 window.editTransaksi = (id) => {
     const data = getData();
     const tx = data.transactions.find(t => t.id === id);
-    if(!tx) return;
-    
+    if (!tx) return;
+
     currentEditTxId = id;
-    
+
     const listView = document.getElementById('penjualan-list-view');
     const formView = document.getElementById('penjualan-form-view');
     const formContainer = document.getElementById('penjualan-form-container');
-    
+
     listView.style.display = 'none';
     formView.style.display = 'block';
-    
+
     const h2 = document.querySelector('#penjualan-form-view h2');
-    if(h2) h2.textContent = 'Edit Data Penjualan';
-    
+    if (h2) h2.textContent = 'Edit Data Penjualan';
+
     initSalesForm(formContainer, data, tx);
 };
 
 window.deleteTransaksi = (id) => {
-    if(confirm('Hapus keseluruhan rekapan transaksi penjualan ini?')) {
+    if (confirm('Hapus keseluruhan rekapan transaksi penjualan ini?')) {
         const data = getData();
         data.transactions = data.transactions.filter(t => t.id !== id);
         saveData(data);
@@ -1527,12 +1363,12 @@ function initSalesForm(container, data, txToEdit = null) {
         penjualanRows = txToEdit.sales.map(s => ({
             id: generateId(), buyerId: s.buyerId, qty: s.qty, unitPrice: (s.qty > 0 ? s.total / s.qty : 0), total: s.total, driverCount: s.driverCount || 1
         }));
-        
+
         opsExpenseRows = [];
         data.expenseTypes.filter(e => e.category === 'Operasional').forEach(e => {
             const detail = txToEdit.expenseDetails.find(d => d.expenseId === e.id);
             if (detail) {
-                opsExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: (detail.qty > 0 ? detail.amount/detail.qty : e.basePrice || 0), qty: detail.qty, total: detail.amount });
+                opsExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: (detail.qty > 0 ? detail.amount / detail.qty : e.basePrice || 0), qty: detail.qty, total: detail.amount });
             } else {
                 opsExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: e.basePrice || 0, qty: 0, total: 0 });
             }
@@ -1542,7 +1378,7 @@ function initSalesForm(container, data, txToEdit = null) {
         data.expenseTypes.filter(e => e.category === 'Retribusi').forEach(e => {
             const detail = txToEdit.expenseDetails.find(d => d.expenseId === e.id);
             if (detail) {
-                retExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: (detail.qty > 0 ? detail.amount/detail.qty : e.basePrice || 0), qty: detail.qty, total: detail.amount });
+                retExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: (detail.qty > 0 ? detail.amount / detail.qty : e.basePrice || 0), qty: detail.qty, total: detail.amount });
             } else {
                 retExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: e.basePrice || 0, qty: 0, total: 0 });
             }
@@ -1550,12 +1386,12 @@ function initSalesForm(container, data, txToEdit = null) {
     } else {
         // Reset lists for new form
         penjualanRows = [{ id: generateId(), buyerId: '', qty: 0, total: 0, driverCount: 1 }];
-        
+
         // Populate default ops and ret expenses from master data
         opsExpenseRows = data.expenseTypes
             .filter(e => e.category === 'Operasional')
             .map(e => ({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: e.basePrice || 0, qty: 0, total: 0 }));
-            
+
         retExpenseRows = data.expenseTypes
             .filter(e => e.category === 'Retribusi')
             .map(e => ({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: e.basePrice || 0, qty: 0, total: 0 }));
@@ -1653,12 +1489,12 @@ function initSalesForm(container, data, txToEdit = null) {
     renderRetRows(data);
 
     document.getElementById('btn-add-penjualan-row').onclick = () => {
-        penjualanRows.push({ 
-            id: generateId(), 
-            buyerId: '', 
-            qty: 0, 
-            unitPrice: 0, 
-            total: 0, 
+        penjualanRows.push({
+            id: generateId(),
+            buyerId: '',
+            qty: 0,
+            unitPrice: 0,
+            total: 0,
             driverCount: 1,
             hargaBatu: 0,
             sewaBreaker: 0,
@@ -1722,7 +1558,7 @@ function syncRetribusiQty() {
     });
     if (updated) {
         renderRetRows(getData());
-        if(window.updateNetProfitSummary) window.updateNetProfitSummary();
+        if (window.updateNetProfitSummary) window.updateNetProfitSummary();
     }
 }
 
@@ -1745,19 +1581,19 @@ function renderSalesRows(data) {
         let isProyekTon = false;
         let options = '<option value="">Pilih...</option>';
         data.buyers.forEach(b => {
-             options += `<option value="${b.id}" ${b.id === row.buyerId ? 'selected' : ''}>${b.name} (${b.category || 'Umum'})</option>`;
-             if (row.buyerId === b.id) {
-                 if (row.unitPrice === undefined) {
-                     row.unitPrice = b.unitPrice; // Initialize if not set
-                 }
-                 if ((b.category || '').toLowerCase() === 'proyek' && (b.unit || '').toLowerCase() === 'ton') {
-                     isProyekTon = true;
-                 }
-             }
+            options += `<option value="${b.id}" ${b.id === row.buyerId ? 'selected' : ''}>${b.name} (${b.category || 'Umum'})</option>`;
+            if (row.buyerId === b.id) {
+                if (row.unitPrice === undefined) {
+                    row.unitPrice = b.unitPrice; // Initialize if not set
+                }
+                if ((b.category || '').toLowerCase() === 'proyek' && (b.unit || '').toLowerCase() === 'ton') {
+                    isProyekTon = true;
+                }
+            }
         });
 
         let driverCountHtml = '';
-        if(isProyekTon) {
+        if (isProyekTon) {
             driverCountHtml = `<input type="number" class="form-control" style="background:#f8fafc; border-color:#cbd5e1; text-align:center" step="1" min="1" value="${row.driverCount || 1}" oninput="updateSalesRow('${row.id}', 'driverCount', this.value)">`;
         } else {
             driverCountHtml = `<input type="text" class="form-control" style="background:#e2e8f0; border-color:#cbd5e1; color:#94a3b8; text-align:center;" value="-" readonly title="Tidak diperlukan">`;
@@ -1807,20 +1643,20 @@ function renderSalesRows(data) {
     `;
 
     container.innerHTML = html;
-    if(window.updateNetProfitSummary) window.updateNetProfitSummary();
+    if (window.updateNetProfitSummary) window.updateNetProfitSummary();
 }
 
 window.updateSalesRow = (id, field, value) => {
     const row = penjualanRows.find(r => r.id === id);
-    if(row) {
-        if(field === 'qty') row.qty = parseFloat(value) || 0;
-        if(field === 'driverCount') row.driverCount = parseInt(value, 10) || 1;
-        
-        if(field === 'buyerId') {
+    if (row) {
+        if (field === 'qty') row.qty = parseFloat(value) || 0;
+        if (field === 'driverCount') row.driverCount = parseInt(value, 10) || 1;
+
+        if (field === 'buyerId') {
             row.buyerId = value;
             const data = getData();
             const b = data.buyers.find(x => x.id === value);
-            if(b) {
+            if (b) {
                 row.hargaBatu = b.unitPrice || 0;
                 // Reset others when buyer changes? Or keep them? Usually reset is safer.
                 row.sewaBreaker = 0;
@@ -1830,14 +1666,14 @@ window.updateSalesRow = (id, field, value) => {
                 row.unitPrice = row.hargaBatu;
             }
         }
-        
-        if(['hargaBatu','sewaBreaker','sewaBucket','solarBreaker','solarBucket'].includes(field)) {
+
+        if (['hargaBatu', 'sewaBreaker', 'sewaBucket', 'solarBreaker', 'solarBucket'].includes(field)) {
             row[field] = parseFloat(value) || 0;
             row.unitPrice = (row.hargaBatu || 0) + (row.sewaBreaker || 0) + (row.sewaBucket || 0) + (row.solarBreaker || 0) + (row.solarBucket || 0);
         }
 
         row.total = row.qty * (row.unitPrice || 0);
-        
+
         // Full render if buyer changed (to update price defaults)
         if (field === 'buyerId') {
             renderSalesRows(getData());
@@ -1849,7 +1685,7 @@ window.updateSalesRow = (id, field, value) => {
                 if (unitInput) unitInput.value = formatCurrency(row.unitPrice);
                 if (totalInput) totalInput.value = formatCurrency(row.total);
             }
-            if(window.updateNetProfitSummary) window.updateNetProfitSummary();
+            if (window.updateNetProfitSummary) window.updateNetProfitSummary();
         }
     }
     if (typeof syncRetribusiQty === 'function') syncRetribusiQty();
@@ -1857,7 +1693,7 @@ window.updateSalesRow = (id, field, value) => {
 
 window.openSetoranDetail = (id) => {
     const row = penjualanRows.find(r => r.id === id);
-    if(!row) return;
+    if (!row) return;
 
     const contentHtml = `
         <div style="padding: 0.5rem;">
@@ -1905,14 +1741,14 @@ window.openSetoranDetail = (id) => {
     const originalUpdate = window.updateSalesRow;
     window.updateSalesRow = (rid, field, val) => {
         originalUpdate(rid, field, val);
-        if(rid === id) {
+        if (rid === id) {
             const el = document.getElementById('setoran-modal-total');
-            if(el) el.textContent = formatCurrency(row.unitPrice);
+            if (el) el.textContent = formatCurrency(row.unitPrice);
         }
     };
 
     openModal('Rincian Setoran', contentHtml);
-    
+
     window.closeModal = () => {
         window.updateSalesRow = originalUpdate; // Restore
         originalClose();
@@ -1941,12 +1777,12 @@ function renderOpsRows(data) {
     opsExpenseRows.forEach((row) => {
         sumTotal += (row.total || 0);
         let labelHtml = '';
-        if(row.expenseId) {
+        if (row.expenseId) {
             labelHtml = `<div style="flex:2; font-size:0.75rem; font-weight:600; text-transform:uppercase; margin-top:0.5rem;">${row.name}</div>`;
         } else {
             let options = '';
             data.expenseTypes.filter(e => e.category === 'Operasional').forEach(e => {
-                 options += `<option value="${e.name}">`;
+                options += `<option value="${e.name}">`;
             });
             labelHtml = `
                 <div style="flex:2">
@@ -1988,34 +1824,34 @@ function renderOpsRows(data) {
     `;
 
     container.innerHTML = html;
-    if(window.updateNetProfitSummary) window.updateNetProfitSummary();
+    if (window.updateNetProfitSummary) window.updateNetProfitSummary();
 }
 
 window.updateOpsRow = (id, field, value) => {
     const row = opsExpenseRows.find(r => r.id === id);
-    if(row) {
+    if (row) {
         let needsFullRender = (field === 'customName' || field === 'expenseId');
 
-        if(field === 'qty') row.qty = parseFloat(value) || 0;
-        if(field === 'basePrice') {
+        if (field === 'qty') row.qty = parseFloat(value) || 0;
+        if (field === 'basePrice') {
             const cleanStr = value.toString().replace(/[^0-9.-]+/g, "");
             row.basePrice = parseFloat(cleanStr) || 0;
         }
-        if(field === 'expenseId') {
+        if (field === 'expenseId') {
             row.expenseId = value;
             const data = getData();
             const exp = data.expenseTypes.find(e => e.id === value);
-            if(exp) {
+            if (exp) {
                 row.name = exp.name;
                 row.basePrice = exp.basePrice || 0;
             }
         }
-        if(field === 'customName') {
-            if(!value.trim()) return;
+        if (field === 'customName') {
+            if (!value.trim()) return;
             row.name = value.trim();
             const data = getData();
             let exp = data.expenseTypes.find(e => e.name.toLowerCase() === row.name.toLowerCase() && e.category === 'Operasional');
-            if(exp) {
+            if (exp) {
                 row.expenseId = exp.id;
                 row.basePrice = exp.basePrice || 0;
             } else {
@@ -2036,7 +1872,7 @@ window.updateOpsRow = (id, field, value) => {
                 const totalInput = rowEl.querySelector('input[readonly]');
                 if (totalInput) totalInput.value = formatCurrency(row.total);
             }
-            if(window.updateNetProfitSummary) window.updateNetProfitSummary();
+            if (window.updateNetProfitSummary) window.updateNetProfitSummary();
         }
     }
 };
@@ -2047,7 +1883,7 @@ window.removeOpsRow = (id) => {
 };
 
 function renderRetRows(data) {
-     const container = document.getElementById('ret-rows-container');
+    const container = document.getElementById('ret-rows-container');
     let html = `
         <div class="d-flex" style="gap:1rem; padding-bottom:0.5rem; border-bottom:1px solid #e5e7eb; margin-bottom:0.5rem; font-size:0.75rem; font-weight:600; color:#4b5563;">
             <div style="flex:2">Jenis Retribusi</div>
@@ -2062,12 +1898,12 @@ function renderRetRows(data) {
     retExpenseRows.forEach((row) => {
         sumTotal += (row.total || 0);
         let labelHtml = '';
-        if(row.expenseId) {
+        if (row.expenseId) {
             labelHtml = `<div style="flex:2; font-size:0.75rem; font-weight:600; text-transform:uppercase; margin-top:0.5rem;">${row.name}</div>`;
         } else {
             let options = '';
             data.expenseTypes.filter(e => e.category === 'Retribusi').forEach(e => {
-                 options += `<option value="${e.name}">`;
+                options += `<option value="${e.name}">`;
             });
             labelHtml = `
                 <div style="flex:2">
@@ -2109,34 +1945,34 @@ function renderRetRows(data) {
     `;
 
     container.innerHTML = html;
-    if(window.updateNetProfitSummary) window.updateNetProfitSummary();
+    if (window.updateNetProfitSummary) window.updateNetProfitSummary();
 }
 
 window.updateRetRow = (id, field, value) => {
     const row = retExpenseRows.find(r => r.id === id);
-    if(row) {
+    if (row) {
         let needsFullRender = (field === 'customName' || field === 'expenseId');
 
-        if(field === 'qty') row.qty = parseFloat(value) || 0;
-        if(field === 'basePrice') {
+        if (field === 'qty') row.qty = parseFloat(value) || 0;
+        if (field === 'basePrice') {
             const cleanStr = value.toString().replace(/[^0-9.-]+/g, "");
             row.basePrice = parseFloat(cleanStr) || 0;
         }
-        if(field === 'expenseId') {
+        if (field === 'expenseId') {
             row.expenseId = value;
             const data = getData();
             const exp = data.expenseTypes.find(e => e.id === value);
-            if(exp) {
+            if (exp) {
                 row.name = exp.name;
                 row.basePrice = exp.basePrice || 0;
             }
         }
-        if(field === 'customName') {
-            if(!value.trim()) return;
+        if (field === 'customName') {
+            if (!value.trim()) return;
             row.name = value.trim();
             const data = getData();
             let exp = data.expenseTypes.find(e => e.name.toLowerCase() === row.name.toLowerCase() && e.category === 'Retribusi');
-            if(exp) {
+            if (exp) {
                 row.expenseId = exp.id;
                 row.basePrice = exp.basePrice || 0;
             } else {
@@ -2157,7 +1993,7 @@ window.updateRetRow = (id, field, value) => {
                 const totalInput = rowEl.querySelector('input[readonly]');
                 if (totalInput) totalInput.value = formatCurrency(row.total);
             }
-            if(window.updateNetProfitSummary) window.updateNetProfitSummary();
+            if (window.updateNetProfitSummary) window.updateNetProfitSummary();
         }
     }
 };
@@ -2169,34 +2005,34 @@ window.removeRetRow = (id) => {
 
 function saveComplexTransaction(data) {
     const date = document.getElementById('form-tx-date').value;
-    
+
     const validSales = penjualanRows.filter(r => r.buyerId && r.qty > 0);
-    if(validSales.length === 0) {
+    if (validSales.length === 0) {
         alert('Minimal isi satu baris penjualan yang valid.');
         return;
     }
-    
+
     let totalOps = 0;
     const opsDetails = opsExpenseRows.filter(r => r.qty > 0 && r.expenseId).map(r => {
         totalOps += r.total;
         return { expenseId: r.expenseId, qty: r.qty, amount: r.total };
     });
-    
+
     let totalRet = 0;
     const retDetails = retExpenseRows.filter(r => r.qty > 0 && r.expenseId).map(r => {
         totalRet += r.total;
         return { expenseId: r.expenseId, qty: r.qty, amount: r.total };
     });
-    
+
     const totalAmount = validSales.reduce((acc, row) => acc + row.total, 0);
 
     const transaction = {
         id: currentEditTxId || generateId(),
         date,
-        sales: validSales.map(r => ({ 
-            buyerId: r.buyerId, 
-            qty: r.qty, 
-            total: r.total, 
+        sales: validSales.map(r => ({
+            buyerId: r.buyerId,
+            qty: r.qty,
+            total: r.total,
             driverCount: r.driverCount || 1,
             hargaBatu: r.hargaBatu || 0,
             sewaBreaker: r.sewaBreaker || 0,
@@ -2211,7 +2047,7 @@ function saveComplexTransaction(data) {
         status: 'Belum Lunas', // By default
         createdAt: new Date().toISOString()
     };
-    
+
     if (currentEditTxId) {
         const idx = data.transactions.findIndex(t => t.id === currentEditTxId);
         if (idx > -1) {
@@ -2225,7 +2061,7 @@ function saveComplexTransaction(data) {
         data.transactions.push(transaction);
         alert('Penjualan ritase/harian berhasil disimpan!');
     }
-    
+
     saveData(data);
     render_penjualan();
 }
@@ -2235,12 +2071,12 @@ window.updateNetProfitSummary = () => {
     const totalOps = opsExpenseRows.reduce((acc, row) => acc + (row.total || 0), 0);
     const totalRet = retExpenseRows.reduce((acc, row) => acc + (row.total || 0), 0);
     const netProfit = totalOmzet - totalOps - totalRet;
-    
+
     const elOmzet = document.getElementById('summary-total-omzet');
     const elOps = document.getElementById('summary-total-ops');
     const elRet = document.getElementById('summary-total-ret');
     const elNet = document.getElementById('summary-net-profit');
-    
+
     if (elOmzet) elOmzet.textContent = formatCurrency(totalOmzet);
     if (elOps) elOps.textContent = formatCurrency(totalOps);
     if (elRet) elRet.textContent = formatCurrency(totalRet);
@@ -2251,7 +2087,7 @@ window.updateNetProfitSummary = () => {
 window.render_penagihan = () => {
     const data = getData();
     const container = document.querySelector('#penagihan .card-body');
-    
+
     // Unpaid "Sale Segments"
     const buyerSales = [];
     data.transactions.filter(t => t.status !== 'Lunas').forEach(t => {
@@ -2268,26 +2104,26 @@ window.render_penagihan = () => {
         container.innerHTML = '<p class="text-center text-muted" style="padding:2rem;">Tidak ada tagihan yang belum lunas (Piutang bersih).</p>';
         return;
     }
-    
+
     const grouped = {};
     buyerSales.forEach(s => {
-        if(!grouped[s.buyerId]) grouped[s.buyerId] = [];
+        if (!grouped[s.buyerId]) grouped[s.buyerId] = [];
         grouped[s.buyerId].push(s);
     });
-    
+
     let html = '';
-    
+
     for (const buyerId in grouped) {
         const buyer = data.buyers.find(b => b.id === buyerId);
         const bName = buyer ? buyer.name : 'Unknown';
         const segments = grouped[buyerId];
         const totalSales = segments.reduce((sum, s) => sum + s.amount, 0);
-        
+
         // Find all deductions linked to this specific buyer
         const buyerDeductions = (data.deductions || []).filter(p => p.buyerId === buyerId);
         const totalBuyerDeductions = buyerDeductions.reduce((sum, p) => sum + p.amount, 0);
         const totalFinalTagihan = totalSales - totalBuyerDeductions;
-        
+
         html += `
             <div style="border:1px solid var(--border-color); border-radius:var(--radius-lg); margin-bottom:1.5rem; overflow:hidden;">
                 <div style="background:#f8fafc; padding:1rem 1.5rem; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
@@ -2336,10 +2172,10 @@ window.render_penagihan = () => {
 };
 
 window.markAsLunas = (txId) => {
-    if(confirm('Apakah Anda yakin transaksi ini sudah dilunasi?')) {
+    if (confirm('Apakah Anda yakin transaksi ini sudah dilunasi?')) {
         const data = getData();
         const tx = data.transactions.find(t => t.id === txId);
-        if(tx) {
+        if (tx) {
             tx.status = 'Lunas';
             tx.paidAt = new Date().toISOString();
             saveData(data);
@@ -2353,7 +2189,7 @@ window.markAsLunas = (txId) => {
 window.exportPenjualanExcel = () => {
     if (!window.XLSX) { alert('Pustaka Excel belum siap, coba lagi sebentar.'); return; }
     const data = getData();
-    
+
     // --- Sheet 1: Penjualan ---
     const penjHeaders = ['Tanggal', 'Nama Pembeli', 'Jumlah Sopir', 'Qty', 'Harga Satuan', 'Total Penjualan'];
     const penjRows = [];
@@ -2371,7 +2207,7 @@ window.exportPenjualanExcel = () => {
             ]);
         });
     });
-    
+
     // --- Sheet 2: Pengeluaran ---
     const expHeaders = ['Tanggal', 'Jenis Pengeluaran', 'Kategori', 'Qty', 'Total'];
     const expRows = [];
@@ -2389,12 +2225,12 @@ window.exportPenjualanExcel = () => {
     });
 
     const wb = XLSX.utils.book_new();
-    
+
     const ws1 = XLSX.utils.aoa_to_sheet([penjHeaders, ...penjRows]);
     // Set column widths
     ws1['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 12 }, { wch: 8 }, { wch: 15 }, { wch: 18 }];
     XLSX.utils.book_append_sheet(wb, ws1, 'Penjualan');
-    
+
     const ws2 = XLSX.utils.aoa_to_sheet([expHeaders, ...expRows]);
     ws2['!cols'] = [{ wch: 12 }, { wch: 25 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'Pengeluaran');
@@ -2430,10 +2266,10 @@ window.importPenjualanExcel = (input) => {
             penjData.forEach(row => {
                 const [date, buyerName, driverCount, qty, unitPrice, total] = row;
                 if (!date || !buyerName) return;
-                
+
                 // Normalize date (Excel serial or string)
-                let dateStr = typeof date === 'number' 
-                    ? XLSX.SSF.format('yyyy-mm-dd', date) 
+                let dateStr = typeof date === 'number'
+                    ? XLSX.SSF.format('yyyy-mm-dd', date)
                     : String(date).trim();
 
                 // Find or create buyer
@@ -2522,7 +2358,7 @@ window.importPenjualanExcel = (input) => {
             saveData(data);
             render_penjualan();
             showToast(`Import selesai: ${added} baru, ${updated} diperbarui`);
-        } catch(err) {
+        } catch (err) {
             alert('Gagal membaca file Excel: ' + err.message);
             console.error(err);
         } finally {
@@ -2536,7 +2372,7 @@ window.importPenjualanExcel = (input) => {
 window.render_laporan = () => {
     const data = getData();
     const container = document.querySelector('#laporan .card-body');
-    
+
     // Default to current week: Monday to Sunday
     const today = new Date();
     const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
@@ -2545,7 +2381,7 @@ window.render_laporan = () => {
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
     const lastWeek = monday; // "from" date
-    
+
     container.innerHTML = `
         <div class="d-flex" style="gap:1rem; margin-bottom:1.5rem; background:var(--bg-color); padding:1.25rem; border-radius:var(--radius-lg); flex-wrap:wrap">
             <div class="form-group" style="margin:0; flex:1; min-width:200px">
@@ -2566,21 +2402,21 @@ window.render_laporan = () => {
     // Populate the Quick Setoran dropdown
     const reportSetoranType = document.getElementById('report-setoran-type');
     if (reportSetoranType) {
-        reportSetoranType.innerHTML = '<option value="">-- Pilih Jenis --</option>' + 
+        reportSetoranType.innerHTML = '<option value="">-- Pilih Jenis --</option>' +
             data.expenseTypes.map(e => `<option value="${e.id}">${e.name}</option>`).join('');
     }
-    
+
     window.generateLaporan = () => {
         const start = document.getElementById('filter-start').value;
         const end = document.getElementById('filter-end').value;
         const res = document.getElementById('laporan-result');
-        
-        if(!start || !end) return;
-        
+
+        if (!start || !end) return;
+
         const filtered = data.transactions.filter(t => t.date >= start && t.date <= end);
-        
+
         // --- DATA AGGREGATION (Grouped by Name + Price) ---
-        
+
         // 1. Income
         const incomeGroups = [];
         filtered.forEach(tx => {
@@ -2638,7 +2474,7 @@ window.render_laporan = () => {
             const pEnd = p.dateEnd || p.date;
             return pStart <= end && pEnd >= start;
         });
-        
+
         // Totals
         const totalIncome = incomeGroups.reduce((sum, g) => sum + g.total, 0);
 
@@ -2646,7 +2482,7 @@ window.render_laporan = () => {
         const setoranAgg = { hargaBatu: 0, lainnya: [] };
         // Base Harga Batu still comes from sales (since it's volume-based)
         filtered.forEach(tx => {
-            if(tx.sales) {
+            if (tx.sales) {
                 tx.sales.forEach(s => setoranAgg.hargaBatu += (s.hargaBatu || (s.unitPrice * (s.qty || 0)) || 0));
             }
         });
@@ -2656,7 +2492,7 @@ window.render_laporan = () => {
         registeredTypeIds.forEach(typeId => {
             const expType = data.expenseTypes.find(e => e.id === typeId);
             if (!expType) return;
-            
+
             // Always sum from expenseDetails — works for both Operasional and Retribusi
             let total = 0;
             filtered.forEach(tx => {
@@ -2664,7 +2500,7 @@ window.render_laporan = () => {
                     if (d.expenseId === typeId) total += (d.amount || 0);
                 });
             });
-            
+
             setoranAgg.lainnya.push({ name: expType.name, total });
         });
 
@@ -2672,7 +2508,7 @@ window.render_laporan = () => {
         const totalOps = opsGroups.reduce((sum, g) => sum + g.total, 0);
         const totalRet = retGroups.reduce((sum, g) => sum + g.total, 0);
         const totalDeductions = filteredDeductions.reduce((sum, p) => sum + p.amount, 0);
-        
+
         // Net Profit (Based on image calculation: Income - Ops - Retri)
         const netProfitValue = totalIncome - totalOps - totalRet;
         // Final Net (After Potongan)
@@ -2858,17 +2694,17 @@ window.render_laporan = () => {
                             </tr>
                         </thead>
                         <tbody>
-                            ${filteredDeductions.length === 0 ? '<tr><td colspan="3" class="text-center">Tidak ada potongan</td></tr>' : 
-                            filteredDeductions.map(p => {
-                                const buyer = data.buyers.find(b => b.id === p.buyerId);
-                                const buyerInfo = buyer ? ` (${buyer.name})` : '';
-                                return `
+                            ${filteredDeductions.length === 0 ? '<tr><td colspan="3" class="text-center">Tidak ada potongan</td></tr>' :
+                filteredDeductions.map(p => {
+                    const buyer = data.buyers.find(b => b.id === p.buyerId);
+                    const buyerInfo = buyer ? ` (${buyer.name})` : '';
+                    return `
                                 <tr>
                                     <td>${p.dateStart && p.dateEnd ? `${formatDate(p.dateStart)} - ${formatDate(p.dateEnd)}` : formatDate(p.date)}</td>
                                     <td>${p.jenis || 'Lainnya'}${buyerInfo} - ${p.description}</td>
                                     <td class="text-right">${p.amount.toLocaleString('id-ID')}</td>
                                 </tr>`;
-                            }).join('')}
+                }).join('')}
                             <tr class="summary-row">
                                 <td colspan="2" class="text-right">TOTAL POTONGAN (B)</td>
                                 <td class="text-right">${totalDeductions.toLocaleString('id-ID')}</td>
@@ -2886,27 +2722,27 @@ window.render_laporan = () => {
             </div>
         `;
     };
-    
+
     document.getElementById('btn-filter-laporan').addEventListener('click', window.generateLaporan);
 };
 
 window.addQuickSetoran = () => {
     const expenseTypeId = document.getElementById('report-setoran-type').value;
-    if(!expenseTypeId) {
+    if (!expenseTypeId) {
         alert('Silakan pilih jenis setoran!');
         return;
     }
 
     const data = getData();
-    if(!data.settlements) data.settlements = [];
-    
+    if (!data.settlements) data.settlements = [];
+
     // Prevent duplicate
     const exists = data.settlements.some(s => s.expenseTypeId === expenseTypeId);
-    if(exists) {
+    if (exists) {
         showToast('Jenis setoran ini sudah terdaftar');
         return;
     }
-    
+
     data.settlements.push({ id: generateId(), expenseTypeId });
     saveData(data);
     showToast('Jenis setoran berhasil didaftarkan');
