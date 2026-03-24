@@ -11,6 +11,7 @@ let supabase = null;
 
 function initSupabase() {
     if (typeof window.supabase === 'undefined') {
+        alert('🚨 ERROR FATAL: Browser Anda gagal mengunduh Supabase! Pastikan internet lancar dan matikan AdBlock/VPN jika mengganggu.');
         console.error('Supabase CDN belum dimuat!');
         return false;
     }
