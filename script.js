@@ -2446,6 +2446,37 @@ window.exportPenjualanExcel = () => {
     showToast('File Excel berhasil diunduh!');
 };
 
+window.downloadPenjualanTemplate = () => {
+    if (!window.XLSX) { alert('Pustaka Excel belum siap, coba lagi sebentar.'); return; }
+
+    // --- Sheet 1: Penjualan ---
+    const penjHeaders = ['Tanggal', 'Nama Pembeli', 'Jumlah Sopir', 'Qty', 'Harga Satuan', 'Total Penjualan'];
+    const penjExample = [
+        ['2026-04-15', 'Nama Pembeli Contoh', 1, 10.5, 50000, 525000],
+        ['2026-04-15', 'Nama Pembeli Lain', 1, 5, 60000, 300000]
+    ];
+
+    // --- Sheet 2: Pengeluaran ---
+    const expHeaders = ['Tanggal', 'Jenis Pengeluaran', 'Kategori', 'Qty', 'Total'];
+    const expExample = [
+        ['2026-04-15', 'Solar Excavator', 'Operasional', 20, 150000],
+        ['2026-04-15', 'Retribusi Desa', 'Retribusi', 1, 50000]
+    ];
+
+    const wb = XLSX.utils.book_new();
+
+    const ws1 = XLSX.utils.aoa_to_sheet([penjHeaders, ...penjExample]);
+    ws1['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 12 }, { wch: 8 }, { wch: 15 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Penjualan');
+
+    const ws2 = XLSX.utils.aoa_to_sheet([expHeaders, ...expExample]);
+    ws2['!cols'] = [{ wch: 12 }, { wch: 25 }, { wch: 14 }, { wch: 8 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Pengeluaran');
+
+    XLSX.writeFile(wb, `template_import_penjualan.xlsx`);
+    showToast('Template Import berhasil diunduh!');
+};
+
 window.importPenjualanExcel = (input) => {
     if (!window.XLSX) { alert('Pustaka Excel belum siap.'); return; }
     const file = input.files[0];
