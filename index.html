@@ -37,7 +37,46 @@
             }
         }
     </style>
-    <div class="app-container">
+
+    <!-- Login Page -->
+    <div id="login-page" class="login-page">
+        <div class="login-bg-shapes">
+            <div class="shape shape-1"></div>
+            <div class="shape shape-2"></div>
+        </div>
+        <div class="login-container">
+            <div class="login-card">
+                <div class="login-header">
+                    <span class="material-symbols-outlined logo-icon">diamond</span>
+                    <h2>CV. RESEP</h2>
+                    <p>Mining & Settlement Management</p>
+                </div>
+                <form id="login-form">
+                    <div class="form-group">
+                        <label for="login-email">Email Address</label>
+                        <div class="input-with-icon">
+                            <span class="material-symbols-outlined">mail</span>
+                            <input type="email" id="login-email" placeholder="name@company.com" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <div class="input-with-icon">
+                            <span class="material-symbols-outlined">lock</span>
+                            <input type="password" id="login-password" placeholder="••••••••" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-login" id="btn-login">
+                        <span>Sign In</span>
+                        <span class="material-symbols-outlined">login</span>
+                    </button>
+                    <div id="login-error" class="login-error"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="app-container" id="main-app" style="display: none;">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -77,6 +116,16 @@
                     <span class="material-symbols-outlined">bar_chart</span>
                     Laporan Mingguan
                 </a>
+                <a href="#" class="nav-link" data-target="users" id="nav-users" style="display: none;">
+                    <span class="material-symbols-outlined">manage_accounts</span>
+                    Manajemen Akun
+                </a>
+                <div style="margin-top: auto; padding: 1rem 1.5rem;">
+                    <button class="btn btn-danger" style="width: 100%; justify-content: center; gap: 0.5rem;" onclick="logout()">
+                        <span class="material-symbols-outlined">logout</span>
+                        Keluar
+                    </button>
+                </div>
             </nav>
         </aside>
 
@@ -88,7 +137,7 @@
                     <span class="date-display" id="current-date"></span>
                     <div class="user-profile">
                         <span class="material-symbols-outlined">account_circle</span>
-                        <span>Dewo (Manajer)</span>
+                        <span id="header-user-name">Loading...</span>
                     </div>
                 </div>
             </header>
@@ -514,6 +563,34 @@
                         </div>
                         <div class="card-body">
                             <p>Loading laporan...</p>
+                        </div>
+                    </div>
+                <!-- User Management Page -->
+                <section id="users" class="page">
+                    <div class="card">
+                        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2>Manajemen Akun</h2>
+                            <button class="btn btn-primary" onclick="openAddUserModal()">
+                                <span class="material-symbols-outlined">person_add</span> Tambah Akun
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Nama</th>
+                                            <th>Email</th>
+                                            <th>Role</th>
+                                            <th>Dibuat</th>
+                                            <th>Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="users-table-body">
+                                        <!-- Dynamic User List -->
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </section>

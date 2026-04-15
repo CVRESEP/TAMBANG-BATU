@@ -98,24 +98,121 @@ async function fetchAllDataFromSupabase() {
             buyers: (buyers || []).map(b => ({ ...b, unitPrice: b.unitprice })),
             drivers: (drivers || []).map(d => ({ ...d, vehicleNumber: d.vehiclenumber })),
             expenseTypes: (expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice })),
-            settlements: (settlements || []).map(s => ({ ...s, expenseTypeId: s.expensetypeid })),
-            deductions: (deductions || []).map(p => ({ ...p, dateStart: p.datestart, dateEnd: p.dateend, buyerId: p.buyerid })),
+            settlements: settlements || [],
+            deductions: (deductions || []).map(d => ({ ...d, buyerId: d.buyerid })),
             transactions: (transactions || []).map(t => ({
                 ...t,
                 buyerId: t.buyerid,
                 driverId: t.driverid,
                 totalAmount: t.totalamount,
                 operationalExpense: t.operationalexpense,
-                retributionExpense: t.retributionexpense,
-                expenseDetails: t.expenses // Map back to original name if needed
+                retributionexpense: t.retributionexpense
             }))
         };
-        
-        console.log("✅ Data berhasil dimuat dari Supabase.");
-    } catch (error) {
-        console.error("❌ Gagal memuat data dari Supabase:", error);
+
+        saveData(_cache);
+        console.log("✅ Data berhasil disinkronkan dari Supabase.");
+    } catch (e) {
+        console.error("❌ Gagal mengambil data dari Supabase:", e);
     }
 }
+
+// ============================================================
+// Authentication & User Management
+// ============================================================
+
+let currentUser = null;
+
+async function initAuth() {
+    if (!window.supabaseClient) return;
+
+    // Login Form Handler
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+            const errorEl = document.getElementById('login-error');
+            const btn = document.getElementById('btn-login');
+
+            errorEl.textContent = '';
+            btn.disabled = true;
+            btn.innerHTML = '<div style="width:20px;height:20px;border:2px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite;"></div> <span>Processing...</span>';
+
+            const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
+
+            if (error) {
+                errorEl.textContent = error.message;
+                btn.disabled = false;
+                btn.innerHTML = '<span>Sign In</span> <span class="material-symbols-outlined">login</span>';
+            } else {
+                // Auth state change listener will handle the UI switch
+            }
+        });
+    }
+
+    // Auth State Listener
+    window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+            if (session) {
+                await handleUserSignIn(session.user);
+            }
+        } else if (event === 'SIGNED_OUT') {
+            handleUserSignOut();
+        }
+    });
+}
+
+async function handleUserSignIn(user) {
+    currentUser = user;
+    
+    // Fetch user profile (role, full name)
+    const { data: profile, error } = await window.supabaseClient
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+    if (profile) {
+        currentUser.profile = profile;
+        document.getElementById('header-user-name').textContent = `${profile.full_name || user.email} (${profile.role || 'Staff'})`;
+        
+        // Show Admin Nav if Role matches
+        const navUsers = document.getElementById('nav-users');
+        if (profile.role === 'Admin') {
+            navUsers.style.display = 'flex';
+        } else {
+            navUsers.style.display = 'none';
+        }
+    } else {
+        document.getElementById('header-user-name').textContent = user.email;
+    }
+
+    // Toggle UI
+    document.getElementById('login-page').style.display = 'none';
+    document.getElementById('main-app').style.display = 'flex';
+    document.getElementById('loading-overlay').style.display = 'none';
+
+    // Refresh Data
+    await fetchAllDataFromSupabase();
+    bootApp(); // Start main app logic
+}
+
+function handleUserSignOut() {
+    currentUser = null;
+    document.getElementById('login-page').style.display = 'flex';
+    document.getElementById('main-app').style.display = 'none';
+    document.getElementById('login-form').reset();
+    document.getElementById('btn-login').disabled = false;
+    document.getElementById('btn-login').innerHTML = '<span>Sign In</span> <span class="material-symbols-outlined">login</span>';
+}
+
+window.logout = async () => {
+    if (confirm('Yakin ingin keluar?')) {
+        await window.supabaseClient.auth.signOut();
+    }
+};
 
 async function saveData(data, table = null, item = null) {
     _cache = data;
@@ -275,10 +372,75 @@ function _initApp() {
 
 // Boot the app when the DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bootApp);
+    document.addEventListener('DOMContentLoaded', initAuth);
 } else {
-    bootApp();
+    initAuth();
 }
+
+// ==========================================
+// USER MANAGEMENT FUNCTIONS
+// ==========================================
+
+window.render_users = async () => {
+    if (!window.supabaseClient) return;
+
+    const { data: profiles, error } = await window.supabaseClient
+        .from('profiles')
+        .select('*')
+        .order('full_name', { ascending: true });
+
+    if (error) {
+        console.error("Gagal mengambil daftar user:", error);
+        return;
+    }
+
+    const tbody = document.getElementById('users-table-body');
+    tbody.innerHTML = profiles.map(p => `
+        <tr>
+            <td>${p.full_name || '-'}</td>
+            <td>${p.email || '-'}</td>
+            <td><span class="badge badge-${p.role.toLowerCase()}">${p.role}</span></td>
+            <td>${new Date(p.created_at).toLocaleDateString()}</td>
+            <td>
+                <button class="btn-icon" onclick="editUser('${p.id}')" title="Edit Role">
+                    <span class="material-symbols-outlined">edit</span>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+};
+
+window.openAddUserModal = () => {
+    alert("Penambahan user baru dilakukan melalui dashboard Supabase (Invite User). \n\nSetelah user menerima undangan, data profil akan otomatis tersedia.");
+};
+
+window.editUser = async (profileId) => {
+    const { data: profile } = await window.supabaseClient.from('profiles').select('*').eq('id', profileId).single();
+    if (!profile) return;
+
+    const newRole = prompt(`Pilih Role Baru untuk ${profile.full_name}:\n(Admin, Manager, Staff)`, profile.role);
+    if (!newRole || !['Admin', 'Manager', 'Staff'].includes(newRole)) return;
+
+    const { error } = await window.supabaseClient
+        .from('profiles')
+        .update({ role: newRole })
+        .eq('id', profileId);
+
+    if (error) {
+        alert("Gagal update role: " + error.message);
+    } else {
+        showToast("Role berhasil diperbarui");
+        render_users();
+    }
+};
+
+// Add navigation listener for Users page
+document.addEventListener('click', (e) => {
+    const navLink = e.target.closest('.nav-link');
+    if (navLink && navLink.dataset.target === 'users') {
+        render_users();
+    }
+});
 
 // ==========================================
 // RENDER FUNCTIONS FOR PAGES
