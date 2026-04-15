@@ -86,12 +86,12 @@ async function fetchAllDataFromSupabase() {
             { data: deductions },
             { data: transactions }
         ] = await Promise.all([
-            supabaseClient.from('buyers').select('*'),
-            supabaseClient.from('drivers').select('*'),
-            supabaseClient.from('expense_types').select('*'),
-            supabaseClient.from('settlements').select('*'),
-            supabaseClient.from('deductions').select('*'),
-            supabaseClient.from('transactions').select('*')
+            window.supabaseClient.from('buyers').select('*'),
+            window.supabaseClient.from('drivers').select('*'),
+            window.supabaseClient.from('expense_types').select('*'),
+            window.supabaseClient.from('settlements').select('*'),
+            window.supabaseClient.from('deductions').select('*'),
+            window.supabaseClient.from('transactions').select('*')
         ]);
 
         _cache = {
@@ -122,13 +122,17 @@ async function saveData(data, table = null, item = null) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 
     if (window.supabaseClient && table && item) {
+        console.log(`📤 Mencoba simpan ke Supabase [${table}]...`, item);
         try {
-            const { error } = await supabaseClient.from(table).upsert(item);
+            const { error } = await window.supabaseClient.from(table).upsert(item);
             if (error) throw error;
             console.log(`✅ Berhasil simpan ke Supabase (${table})`);
         } catch (e) {
             console.error(`❌ Gagal simpan ke Supabase (${table}):`, e);
+            alert(`Gagal sinkron ke Cloud: ${e.message || e}`);
         }
+    } else {
+        console.warn("⚠️ Sinkronisasi Supabase dilewati (Client/Table/Item tidak siap).", { client: !!window.supabaseClient, table, item: !!item });
     }
 }
 
