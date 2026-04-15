@@ -268,6 +268,9 @@ function _initApp() {
     if (sType) {
         sType.addEventListener('change', () => render_potongan_page());
     }
+
+    // Initialize Bulk Delete Listeners
+    initBulkDeleteListeners();
 }
 
 // Boot the app when the DOM is ready
@@ -337,6 +340,7 @@ window.render_pembeli = () => {
         const badgeColor = buyer.category === 'Proyek' ? 'var(--success)' : 'var(--primary-color)';
         const badgeBg = buyer.category === 'Proyek' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(79, 70, 229, 0.1)';
         tr.innerHTML = `
+            <td><input type="checkbox" class="check-pembeli" data-id="${buyer.id}"></td>
             <td><strong>${buyer.name}</strong></td>
             <td><span style="display:inline-block; padding:0.25rem 0.5rem; border-radius:1rem; font-size:0.75rem; background:${badgeBg}; color:${badgeColor}; font-weight:600">${buyer.category || 'Umum'}</span></td>
             <td>${buyer.address}</td>
@@ -366,6 +370,7 @@ window.render_sopir = () => {
     data.drivers.forEach(driver => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
+            <td><input type="checkbox" class="check-sopir" data-id="${driver.id}"></td>
             <td><strong>${driver.name}</strong></td>
             <td><span class="badge" style="background:#f3f4f6; color:#111827; padding:0.2rem 0.6rem; border-radius:0.5rem; border:1px solid #e5e7eb;">${driver.vehicleNumber}</span></td>
             <td>${driver.phone}</td>
@@ -396,6 +401,7 @@ window.render_pengeluaran = () => {
         const natureBg = exp.nature === 'Pasti' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)';
 
         tr.innerHTML = `
+            <td><input type="checkbox" class="check-pengeluaran" data-id="${exp.id}"></td>
             <td><strong>${exp.name}</strong></td>
             <td><span style="display:inline-block; padding:0.25rem 0.5rem; border-radius:1rem; font-size:0.75rem; background:${exp.category === 'Operasional' ? 'rgba(79, 70, 229, 0.1)' : 'rgba(245, 158, 11, 0.1)'}; color:${exp.category === 'Operasional' ? 'var(--primary-color)' : 'var(--warning)'}">${exp.category}</span></td>
             <td><span style="display:inline-block; padding:0.25rem 0.5rem; border-radius:1rem; font-size:0.75rem; background:${natureBg}; color:${natureColor}; font-weight:600">${exp.nature || 'Tidak Pasti'}</span></td>
@@ -508,6 +514,7 @@ window.render_setoran_table = (data, start, end, typeId = '') => {
             const expType = data.expenseTypes.find(e => e.id === s.expenseTypeId);
             return `
                 <tr>
+                    <td><input type="checkbox" class="check-setoran" data-id="${s.id}"></td>
                     <td><span class="badge" style="background:#f0f9ff; color:#0369a1; border:1px solid #bae6fd">${expType ? expType.name : 'Umum'}</span></td>
                     <td>
                         <button class="btn-icon text-danger" onclick="deleteSetoran('${s.id}')" title="Hapus"><span class="material-symbols-outlined">delete</span></button>
@@ -537,6 +544,7 @@ window.render_potongan_table = (data, start, end) => {
             const dateStr = p.dateStart && p.dateEnd ? `${formatDate(p.dateStart)} - ${formatDate(p.dateEnd)}` : formatDate(p.date);
             return `
                 <tr>
+                    <td><input type="checkbox" class="check-potongan" data-id="${p.id}"></td>
                     <td>${dateStr}</td>
                     <td><span class="badge" style="background:${p.jenis === 'Kasbon' ? '#fff7ed' : '#f0f9ff'}; color:${p.jenis === 'Kasbon' ? '#9a3412' : '#0369a1'}; border:1px solid ${p.jenis === 'Kasbon' ? '#fed7aa' : '#bae6fd'}">${p.jenis || 'Potongan Penjualan'}</span></td>
                     <td>${buyer ? `<strong>${buyer.name}</strong><br>` : ''}${p.description}</td>
@@ -1439,6 +1447,7 @@ window.render_penjualan = () => {
             const firstBuyerId = (tx.sales && tx.sales.length > 0) ? tx.sales[0].buyerId : null;
 
             tr.innerHTML = `
+                <td><input type="checkbox" class="check-penjualan" data-id="${tx.id}"></td>
                 <td>${formatDate(tx.date)}</td>
                 <td>${rincianInfo}</td>
                 <td style="font-weight:600">${formatCurrency(tx.totalAmount)}</td>
@@ -2988,3 +2997,115 @@ window.openQuickPotonganModal = () => {
         if (window.generateLaporan) window.generateLaporan();
     };
 };
+
+// ==========================================
+// BULK ACTIONS LOGIC
+// ==========================================
+
+function initBulkDeleteListeners() {
+    const bulkConfigs = [
+        { type: 'penjualan', tableId: 'table-penjualan-list', cacheKey: 'transactions', supabaseTable: 'transactions', renderFn: 'render_penjualan' },
+        { type: 'pembeli', tableId: 'table-pembeli', cacheKey: 'buyers', supabaseTable: 'buyers', renderFn: 'render_pembeli' },
+        { type: 'sopir', tableId: 'table-sopir', cacheKey: 'drivers', supabaseTable: 'drivers', renderFn: 'render_sopir' },
+        { type: 'pengeluaran', tableId: 'table-pengeluaran', cacheKey: 'expenseTypes', supabaseTable: 'expense_types', renderFn: 'render_pengeluaran' },
+        { type: 'setoran', tableId: 'table-setoran', cacheKey: 'settlements', supabaseTable: 'settlements', renderFn: 'render_potongan' },
+        { type: 'potongan', tableId: 'table-potongan', cacheKey: 'deductions', supabaseTable: 'deductions', renderFn: 'render_potongan' }
+    ];
+
+    bulkConfigs.forEach(config => {
+        const checkAll = document.getElementById(`check-all-${config.type}`);
+        const btnBulk = document.getElementById(`btn-bulk-delete-${config.type}`);
+
+        if (checkAll) {
+            checkAll.addEventListener('change', (e) => {
+                const isChecked = e.target.checked;
+                const checkboxes = document.querySelectorAll(`.check-${config.type}`);
+                checkboxes.forEach(cb => cb.checked = isChecked);
+                updateBulkDeleteButton(config.type);
+            });
+        }
+
+        if (btnBulk) {
+            btnBulk.addEventListener('click', () => {
+                const checkboxes = document.querySelectorAll(`.check-${config.type}:checked`);
+                const selectedIds = Array.from(checkboxes).map(cb => cb.dataset.id);
+
+                if (selectedIds.length === 0) return;
+
+                if (confirm(`Apakah Anda yakin ingin menghapus ${selectedIds.length} data terpilih?`)) {
+                    executeBulkDelete(config, selectedIds);
+                }
+            });
+        }
+    });
+
+    // Global listener for individual checkboxes (Efficiency via delegation)
+    document.addEventListener('change', (e) => {
+        if (e.target.classList.contains('check-penjualan') || 
+            e.target.classList.contains('check-pembeli') || 
+            e.target.classList.contains('check-sopir') || 
+            e.target.classList.contains('check-pengeluaran') || 
+            e.target.classList.contains('check-setoran') || 
+            e.target.classList.contains('check-potongan')) {
+            
+            const type = e.target.className.replace('check-', '');
+            updateBulkDeleteButton(type);
+        }
+    });
+}
+
+function updateBulkDeleteButton(type) {
+    const btn = document.getElementById(`btn-bulk-delete-${type}`);
+    const checkAll = document.getElementById(`check-all-${type}`);
+    if (!btn) return;
+
+    const checkedCount = document.querySelectorAll(`.check-${type}:checked`).length;
+    const totalCount = document.querySelectorAll(`.check-${type}`).length;
+
+    if (checkedCount > 0) {
+        btn.style.display = 'flex';
+        btn.style.alignItems = 'center';
+    } else {
+        btn.style.display = 'none';
+    }
+
+    if (checkAll) {
+        checkAll.checked = checkedCount > 0 && checkedCount === totalCount;
+        checkAll.indeterminate = checkedCount > 0 && checkedCount < totalCount;
+    }
+}
+
+async function executeBulkDelete(config, ids) {
+    const data = getData();
+    
+    // Update Cache
+    data[config.cacheKey] = data[config.cacheKey].filter(item => !ids.includes(item.id));
+    saveData(data); // Local storage update
+
+    // Supabase Delete
+    if (window.supabaseClient) {
+        try {
+            const { error } = await window.supabaseClient.from(config.supabaseTable).delete().in('id', ids);
+            if (error) throw error;
+            console.log(`✅ Berhasil hapus bulk dari Supabase (${config.supabaseTable})`);
+        } catch (e) {
+            console.error(`❌ Gagal hapus bulk dari Supabase (${config.supabaseTable}):`, e);
+            alert(`Beberapa data mungkin gagal dihapus dari cloud, silakan refresh.`);
+        }
+    }
+
+    // Reset Check All
+    const checkAll = document.getElementById(`check-all-${config.type}`);
+    if (checkAll) checkAll.checked = false;
+
+    // Refresh UI
+    if (window[config.renderFn]) {
+        window[config.renderFn]();
+    }
+    
+    updateBulkDeleteButton(config.type);
+}
+
+// Add these to window so they are accessible if needed
+window.initBulkDeleteListeners = initBulkDeleteListeners;
+window.updateBulkDeleteButton = updateBulkDeleteButton;

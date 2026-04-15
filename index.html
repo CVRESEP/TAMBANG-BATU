@@ -177,6 +177,9 @@
                                 </button>
                                 <input type="file" id="import-excel-input" accept=".xlsx,.xls" style="display:none"
                                     onchange="importPenjualanExcel(this)">
+                                <button class="btn btn-danger" id="btn-bulk-delete-penjualan" style="display:none">
+                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus Terpilih
+                                </button>
                                 <button class="btn btn-primary" id="btn-show-add-penjualan">
                                     <span class="material-symbols-outlined">add</span> Tambah Penjualan
                                 </button>
@@ -187,6 +190,7 @@
                                 <table class="table" id="table-penjualan-list">
                                     <thead>
                                         <tr>
+                                            <th style="width: 40px;"><input type="checkbox" id="check-all-penjualan"></th>
                                             <th>Tanggal</th>
                                             <th>Rincian Pembeli</th>
                                             <th>Total tagihan kotor</th>
@@ -224,15 +228,21 @@
                     <div class="card">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Pembeli</h2>
-                            <button class="btn btn-primary" id="btn-add-pembeli">
-                                <span class="material-symbols-outlined">add</span> Tambah Pembeli
-                            </button>
+                            <div class="d-flex" style="gap:0.5rem">
+                                <button class="btn btn-danger" id="btn-bulk-delete-pembeli" style="display:none">
+                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                </button>
+                                <button class="btn btn-primary" id="btn-add-pembeli">
+                                    <span class="material-symbols-outlined">add</span> Tambah Pembeli
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
                                 <table class="table" id="table-pembeli">
                                     <thead>
                                         <tr>
+                                            <th style="width: 40px;"><input type="checkbox" id="check-all-pembeli"></th>
                                             <th>Nama</th>
                                             <th>Kategori</th>
                                             <th>Alamat</th>
@@ -255,15 +265,21 @@
                     <div class="card">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Sopir</h2>
-                            <button class="btn btn-primary" id="btn-add-sopir">
-                                <span class="material-symbols-outlined">add</span> Tambah Sopir
-                            </button>
+                            <div class="d-flex" style="gap:0.5rem">
+                                <button class="btn btn-danger" id="btn-bulk-delete-sopir" style="display:none">
+                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                </button>
+                                <button class="btn btn-primary" id="btn-add-sopir">
+                                    <span class="material-symbols-outlined">add</span> Tambah Sopir
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
                                 <table class="table" id="table-sopir">
                                     <thead>
                                         <tr>
+                                            <th style="width: 40px;"><input type="checkbox" id="check-all-sopir"></th>
                                             <th>Nama</th>
                                             <th>No. Kendaraan</th>
                                             <th>No. HP</th>
@@ -283,15 +299,21 @@
                     <div class="card">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Jenis Pengeluaran</h2>
-                            <button class="btn btn-primary" id="btn-add-pengeluaran">
-                                <span class="material-symbols-outlined">add</span> Tambah Pengeluaran
-                            </button>
+                            <div class="d-flex" style="gap:0.5rem">
+                                <button class="btn btn-danger" id="btn-bulk-delete-pengeluaran" style="display:none">
+                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                </button>
+                                <button class="btn btn-primary" id="btn-add-pengeluaran">
+                                    <span class="material-symbols-outlined">add</span> Tambah Pengeluaran
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
                                 <table class="table" id="table-pengeluaran">
                                     <thead>
                                         <tr>
+                                            <th style="width: 40px;"><input type="checkbox" id="check-all-pengeluaran"></th>
                                             <th>Nama Pengeluaran</th>
                                             <th>Kategori</th>
                                             <th>Jenis (Sifat)</th>
@@ -341,16 +363,22 @@
                                 <input type="date" id="filter-potongan-end" class="form-control"
                                     style="padding: 0.25rem 0.5rem; width:130px">
                             </div>
-                            <button class="btn btn-primary" id="btn-add-setoran"
-                                style="background: var(--secondary-color)">
-                                <span class="material-symbols-outlined">add</span> Tambah Setoran
-                            </button>
+                            <div class="d-flex" style="gap:0.5rem">
+                                <button class="btn btn-danger" id="btn-bulk-delete-setoran" style="display:none">
+                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                </button>
+                                <button class="btn btn-primary" id="btn-add-setoran"
+                                    style="background: var(--secondary-color)">
+                                    <span class="material-symbols-outlined">add</span> Tambah Setoran
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
                                 <table class="table" id="table-setoran">
                                     <thead>
                                         <tr>
+                                            <th style="width: 40px;"><input type="checkbox" id="check-all-setoran"></th>
                                             <th>Jenis Setoran</th>
                                             <th>Aksi</th>
                                         </tr>
@@ -369,9 +397,14 @@
                                     style="background:var(--secondary-color)">
                                     <span class="material-symbols-outlined">add</span> Tambah Setoran
                                 </button>
-                                <button class="btn btn-primary" id="btn-add-potongan">
-                                    <span class="material-symbols-outlined">add</span> Tambah Potongan
-                                </button>
+                                <div class="d-flex" style="gap:0.5rem">
+                                    <button class="btn btn-danger" id="btn-bulk-delete-potongan" style="display:none">
+                                        <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                    </button>
+                                    <button class="btn btn-primary" id="btn-add-potongan">
+                                        <span class="material-symbols-outlined">add</span> Tambah Potongan
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <div class="card-body">
@@ -379,6 +412,7 @@
                                 <table class="table" id="table-potongan">
                                     <thead>
                                         <tr>
+                                            <th style="width: 40px;"><input type="checkbox" id="check-all-potongan"></th>
                                             <th>Dari Tanggal</th>
                                             <th>Sampai Tanggal</th>
                                             <th>Jenis</th>
