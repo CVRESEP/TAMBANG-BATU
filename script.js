@@ -122,21 +122,13 @@ async function saveData(data, table = null, item = null) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 
     if (window.supabaseClient && table && item) {
-        console.log(`📤 Mencoba simpan ke Supabase [${table}]...`, item);
         try {
             const { error } = await window.supabaseClient.from(table).upsert(item);
             if (error) throw error;
             console.log(`✅ Berhasil simpan ke Supabase (${table})`);
-            // Alert opsional untuk konfirmasi sukses (hanya untuk debug)
-            // alert(`Berhasil simpan ke Cloud!`);
         } catch (e) {
             console.error(`❌ Gagal simpan ke Supabase (${table}):`, e);
-            alert(`ERROR SUPABASE (${table}): ${e.message || JSON.stringify(e)}`);
         }
-    } else {
-        const reason = !window.supabaseClient ? "Client Supabase Belum Siap" : (!table ? "Nama Tabel Kosong" : "Data Kosong");
-        console.warn(`⚠️ Sinkronisasi Supabase dilewati: ${reason}`);
-        alert(`WARNING: Sinkronisasi dilewati karena: ${reason}`);
     }
 }
 
