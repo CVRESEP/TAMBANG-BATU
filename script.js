@@ -2156,6 +2156,8 @@ function saveComplexTransaction(data) {
     const transaction = {
         id: currentEditTxId || generateId(),
         date,
+        buyerId: validSales[0]?.buyerId || null,
+        driverId: null, // Sopir tidak ada di rincian ini secara global
         sales: validSales.map(r => ({
             buyerId: r.buyerId,
             qty: r.qty,
@@ -2170,16 +2172,16 @@ function saveComplexTransaction(data) {
         totalAmount,
         operationalExpense: totalOps,
         retributionExpense: totalRet,
-        expenseDetails: [...opsDetails, ...retDetails],
+        expenses: [...opsDetails, ...retDetails],
         status: 'Belum Lunas', // By default
-        createdAt: new Date().toISOString()
+        created_at: new Date().toISOString()
     };
 
     if (currentEditTxId) {
         const idx = data.transactions.findIndex(t => t.id === currentEditTxId);
         if (idx > -1) {
             transaction.status = data.transactions[idx].status;
-            transaction.createdAt = data.transactions[idx].createdAt;
+            transaction.created_at = data.transactions[idx].created_at;
             data.transactions[idx] = transaction;
         }
         currentEditTxId = null;
