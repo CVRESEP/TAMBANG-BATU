@@ -40,7 +40,7 @@ function printLaporanPDF() {
 }
 
 // ============================================================
-// State Management — Pure Local Storage
+// State Management — Supabase Integration
 // ============================================================
 const STORAGE_KEY = 'tambangBatuData';
 
@@ -72,9 +72,68 @@ function getData() {
     return _cache;
 }
 
-function saveData(data) {
+// Fetch all data from Supabase
+async function fetchAllDataFromSupabase() {
+    if (!window.supabaseClient) return;
+    
+    console.log("📥 Mengambil data dari Supabase...");
+    try {
+        const [
+            { data: buyers },
+            { data: drivers },
+            { data: expenseTypes },
+            { data: settlements },
+            { data: deductions },
+            { data: transactions }
+        ] = await Promise.all([
+            supabaseClient.from('buyers').select('*'),
+            supabaseClient.from('drivers').select('*'),
+            supabaseClient.from('expense_types').select('*'),
+            supabaseClient.from('settlements').select('*'),
+            supabaseClient.from('deductions').select('*'),
+            supabaseClient.from('transactions').select('*')
+        ]);
+
+        _cache = {
+            buyers: buyers || [],
+            drivers: drivers || [],
+            expenseTypes: expenseTypes || [],
+            settlements: settlements || [],
+            deductions: deductions || [],
+            transactions: transactions || []
+        };
+        
+        console.log("✅ Data berhasil dimuat dari Supabase.");
+    } catch (error) {
+        console.error("❌ Gagal memuat data dari Supabase:", error);
+    }
+}
+
+async function saveData(data, table = null, item = null) {
     _cache = data;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+
+    if (window.supabaseClient && table && item) {
+        try {
+            const { error } = await supabaseClient.from(table).upsert(item);
+            if (error) throw error;
+            console.log(`✅ Berhasil simpan ke Supabase (${table})`);
+        } catch (e) {
+            console.error(`❌ Gagal simpan ke Supabase (${table}):`, e);
+        }
+    }
+}
+
+async function deleteFromSupabase(table, id) {
+    if (window.supabaseClient) {
+        try {
+            const { error } = await supabaseClient.from(table).delete().eq('id', id);
+            if (error) throw error;
+            console.log(`✅ Berhasil hapus dari Supabase (${table})`);
+        } catch (e) {
+            console.error(`❌ Gagal hapus dari Supabase (${table}):`, e);
+        }
+    }
 }
 
 function updateData(key, newArray) {
@@ -84,20 +143,21 @@ function updateData(key, newArray) {
 }
 
 // App boot — called once on page load
-function bootApp() {
-    console.log("🛠️ [DEBUG] bootApp dipanggil (Mode Lokal)!");
-    
-    // Ensure cache is loaded
-    getData();
+async function bootApp() {
+    console.log("🛠️ [DEBUG] bootApp dipanggil (Mode Supabase)!");
     
     const overlay = document.getElementById('loading-overlay');
     try {
+        // Coba load dari Supabase
+        await fetchAllDataFromSupabase();
         _initApp();
     } catch(err) {
         console.error('Boot error:', err);
+        // Fallback ke local
+        _initApp();
     } finally {
         if (overlay) overlay.style.display = 'none';
-        console.log("✅ [DEBUG] Overlay disembunyikan. App siap digunakan secara lokal.");
+        console.log("✅ [DEBUG] App siap digunakan.");
     }
 }
 
@@ -593,17 +653,20 @@ function savePembeli() {
     const unitPrice = parseFloat(document.getElementById('pembeli-price').value);
 
     const data = getData();
+    let item;
 
     if (currentEditId) {
         const index = data.buyers.findIndex(b => b.id === currentEditId);
         if (index > -1) {
             data.buyers[index] = { ...data.buyers[index], name, category, address, unit, unitPrice };
+            item = data.buyers[index];
         }
     } else {
-        data.buyers.push({ id: generateId(), name, category, address, unit, unitPrice });
+        item = { id: generateId(), name, category, address, unit, unitPrice };
+        data.buyers.push(item);
     }
 
-    saveData(data);
+    saveData(data, 'buyers', item);
     closeModal();
     render_pembeli();
 }
@@ -613,6 +676,7 @@ window.deletePembeli = (id) => {
         const data = getData();
         data.buyers = data.buyers.filter(b => b.id !== id);
         saveData(data);
+        deleteFromSupabase('buyers', id);
         render_pembeli();
     }
 };
@@ -688,17 +752,20 @@ function saveSopir() {
     const phone = document.getElementById('sopir-phone').value;
 
     const data = getData();
+    let item;
 
     if (currentEditId) {
         const index = data.drivers.findIndex(d => d.id === currentEditId);
         if (index > -1) {
             data.drivers[index] = { ...data.drivers[index], name, vehicleNumber, phone };
+            item = data.drivers[index];
         }
     } else {
-        data.drivers.push({ id: generateId(), name, vehicleNumber, phone });
+        item = { id: generateId(), name, vehicleNumber, phone };
+        data.drivers.push(item);
     }
 
-    saveData(data);
+    saveData(data, 'drivers', item);
     closeModal();
     render_sopir();
 }
@@ -708,6 +775,7 @@ window.deleteSopir = (id) => {
         const data = getData();
         data.drivers = data.drivers.filter(d => d.id !== id);
         saveData(data);
+        deleteFromSupabase('drivers', id);
         render_sopir();
     }
 };
@@ -813,17 +881,20 @@ function savePengeluaran() {
     const basePrice = parseFloat(document.getElementById('pengeluaran-price').value) || 0;
 
     const data = getData();
+    let item;
 
     if (currentEditId) {
         const index = data.expenseTypes.findIndex(e => e.id === currentEditId);
         if (index > -1) {
             data.expenseTypes[index] = { ...data.expenseTypes[index], name, category, nature, unit, basePrice };
+            item = data.expenseTypes[index];
         }
     } else {
-        data.expenseTypes.push({ id: generateId(), name, category, nature, unit, basePrice });
+        item = { id: generateId(), name, category, nature, unit, basePrice };
+        data.expenseTypes.push(item);
     }
 
-    saveData(data);
+    saveData(data, 'expense_types', item);
     closeModal();
     render_pengeluaran();
 }
@@ -833,6 +904,7 @@ window.deletePengeluaran = (id) => {
         const data = getData();
         data.expenseTypes = data.expenseTypes.filter(e => e.id !== id);
         saveData(data);
+        deleteFromSupabase('expense_types', id);
         render_pengeluaran();
     }
 };
@@ -1010,7 +1082,18 @@ function saveBulkPotongan() {
         return;
     }
 
-    saveData(data);
+    saveData(data); // Full local sync
+
+    // Individual sync to Supabase for added rows
+    if (window.supabaseClient) {
+        const rowsToSync = data.deductions.slice(-added);
+        rowsToSync.forEach(row => {
+            supabaseClient.from('deductions').upsert(row).then(({error}) => {
+                if (error) console.error("Gagal sync bulk potongan:", error);
+            });
+        });
+    }
+
     closeModal();
     render_potongan();
     alert(`Berhasil menyimpan ${added} data potongan.`);
@@ -1147,17 +1230,20 @@ function savePotongan() {
     if (!data.deductions) data.deductions = [];
 
     const potData = { jenis, buyerId, dateStart, dateEnd, description, amount };
+    let item;
 
     if (currentEditId) {
         const index = data.deductions.findIndex(p => p.id === currentEditId);
         if (index > -1) {
             data.deductions[index] = { ...data.deductions[index], ...potData };
+            item = data.deductions[index];
         }
     } else {
-        data.deductions.push({ id: generateId(), ...potData });
+        item = { id: generateId(), ...potData };
+        data.deductions.push(item);
     }
 
-    saveData(data);
+    saveData(data, 'deductions', item);
     closeModal();
     render_potongan();
 }
@@ -1167,6 +1253,7 @@ window.deletePotongan = (id) => {
         const data = getData();
         data.deductions = data.deductions.filter(p => p.id !== id);
         saveData(data);
+        deleteFromSupabase('deductions', id);
         render_potongan();
     }
 };
@@ -1220,14 +1307,19 @@ window.saveSetoran = (id) => {
         return;
     }
 
+    let item;
     if (id) {
         const index = data.settlements.findIndex(s => s.id === id);
-        if (index > -1) data.settlements[index].expenseTypeId = expenseTypeId;
+        if (index > -1) {
+            data.settlements[index].expenseTypeId = expenseTypeId;
+            item = data.settlements[index];
+        }
     } else {
-        data.settlements.push({ id: generateId(), expenseTypeId });
+        item = { id: generateId(), expenseTypeId };
+        data.settlements.push(item);
     }
 
-    saveData(data);
+    saveData(data, 'settlements', item);
     closeModal();
     render_potongan();
 };
@@ -1237,6 +1329,7 @@ window.deleteSetoran = (id) => {
         const data = getData();
         data.settlements = data.settlements.filter(s => s.id !== id);
         saveData(data);
+        deleteFromSupabase('settlements', id);
         render_potongan();
     }
 };
@@ -1353,6 +1446,7 @@ window.deleteTransaksi = (id) => {
         const data = getData();
         data.transactions = data.transactions.filter(t => t.id !== id);
         saveData(data);
+        deleteFromSupabase('transactions', id);
         render_penjualan();
     }
 };
@@ -2095,7 +2189,7 @@ function saveComplexTransaction(data) {
         alert('Penjualan ritase/harian berhasil disimpan!');
     }
 
-    saveData(data);
+    saveData(data, 'transactions', transaction);
     render_penjualan();
 }
 
@@ -2211,7 +2305,7 @@ window.markAsLunas = (txId) => {
         if (tx) {
             tx.status = 'Lunas';
             tx.paidAt = new Date().toISOString();
-            saveData(data);
+            saveData(data, 'transactions', tx);
             render_penagihan();
         }
     }
