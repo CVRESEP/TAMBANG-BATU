@@ -1,19 +1,28 @@
 :root {
     /* Colors */
-    --primary-color: #4f46e5; /* Indigo 600 */
-    --primary-hover: #4338ca; /* Indigo 700 */
-    --bg-color: #f3f4f6; /* Gray 100 */
+    --primary-color: #4f46e5;
+    /* Indigo 600 */
+    --primary-hover: #4338ca;
+    /* Indigo 700 */
+    --bg-color: #f3f4f6;
+    /* Gray 100 */
     --surface-color: #ffffff;
-    --text-primary: #111827; /* Gray 900 */
-    --text-secondary: #4b5563; /* Gray 600 */
-    --text-muted: #9ca3af; /* Gray 400 */
-    --border-color: #e5e7eb; /* Gray 200 */
-    
-    --sidebar-bg: #1e1b4b; /* Indigo 950 */
-    --sidebar-text: #c7d2fe; /* Indigo 200 */
+    --text-primary: #111827;
+    /* Gray 900 */
+    --text-secondary: #4b5563;
+    /* Gray 600 */
+    --text-muted: #9ca3af;
+    /* Gray 400 */
+    --border-color: #e5e7eb;
+    /* Gray 200 */
+
+    --sidebar-bg: #1e1b4b;
+    /* Indigo 950 */
+    --sidebar-text: #c7d2fe;
+    /* Indigo 200 */
     --sidebar-text-active: #ffffff;
     --sidebar-active-bg: rgba(255, 255, 255, 0.1);
-    
+
     --success: #10b981;
     --secondary-color: #10b981;
     --danger: #ef4444;
@@ -28,7 +37,7 @@
     --radius-md: 0.5rem;
     --radius-lg: 0.75rem;
     --radius-xl: 1rem;
-    
+
     /* Transitions */
     --transition: all 0.3s ease;
 }
@@ -70,7 +79,7 @@ body {
     padding: 0 1.5rem;
     gap: 0.75rem;
     color: white;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .logo-icon {
@@ -100,7 +109,7 @@ body {
 }
 
 .nav-link:hover {
-    background-color: rgba(255,255,255,0.05);
+    background-color: rgba(255, 255, 255, 0.05);
     color: white;
 }
 
@@ -171,8 +180,15 @@ body {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* Cards */
@@ -260,12 +276,29 @@ body {
 }
 
 /* Utilities */
-.d-flex { display: flex; }
-.justify-between { justify-content: space-between; }
-.align-center { align-items: center; }
-.mt-4 { margin-top: 1.5rem; }
-.text-muted { color: var(--text-muted); }
-.text-center { text-align: center; }
+.d-flex {
+    display: flex;
+}
+
+.justify-between {
+    justify-content: space-between;
+}
+
+.align-center {
+    align-items: center;
+}
+
+.mt-4 {
+    margin-top: 1.5rem;
+}
+
+.text-muted {
+    color: var(--text-muted);
+}
+
+.text-center {
+    text-align: center;
+}
 
 /* Buttons */
 .btn {
@@ -335,7 +368,8 @@ body {
     border-collapse: collapse;
 }
 
-.table th, .table td {
+.table th,
+.table td {
     padding: 1rem;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
@@ -358,7 +392,7 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(0,0,0,0.5);
+    background-color: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(4px);
     z-index: 40;
     opacity: 0;
@@ -457,8 +491,9 @@ select.form-control {
    PRINT / PDF EXPORT STYLES
    ========================================== */
 @media print {
+
     /* Hide everything by default */
-    body > * {
+    body>* {
         display: none !important;
     }
 
@@ -471,7 +506,7 @@ select.form-control {
         width: 100%;
         z-index: 9999;
     }
-    
+
     .no-print {
         display: none !important;
     }

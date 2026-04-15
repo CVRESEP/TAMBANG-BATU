@@ -1761,6 +1761,39 @@ window.removeSalesRow = (id) => {
     if (typeof syncRetribusiQty === 'function') syncRetribusiQty();
 };
 
+window.handleVerticalTab = function(e, colClass, nextColClass, prevColClass) {
+    if (e.key === 'Tab') {
+        const inputs = Array.from(document.querySelectorAll('.' + colClass)).filter(el => el.offsetParent !== null);
+        const index = inputs.indexOf(e.target);
+        
+        if (e.shiftKey) {
+            // Tab Up
+            if (index > 0) {
+                e.preventDefault();
+                inputs[index - 1].focus();
+            } else if (index === 0 && prevColClass) {
+                const prevInputs = Array.from(document.querySelectorAll('.' + prevColClass)).filter(el => el.offsetParent !== null);
+                if (prevInputs.length > 0) {
+                    e.preventDefault();
+                    prevInputs[prevInputs.length - 1].focus();
+                }
+            }
+        } else {
+            // Tab Down
+            if (index > -1 && index < inputs.length - 1) {
+                e.preventDefault();
+                inputs[index + 1].focus();
+            } else if (index === inputs.length - 1 && nextColClass) {
+                const nextInputs = Array.from(document.querySelectorAll('.' + nextColClass)).filter(el => el.offsetParent !== null);
+                if (nextInputs.length > 0) {
+                    e.preventDefault();
+                    nextInputs[0].focus();
+                }
+            }
+        }
+    }
+};
+
 function renderOpsRows(data) {
     const container = document.getElementById('ops-rows-container');
     let html = `
@@ -1786,7 +1819,7 @@ function renderOpsRows(data) {
             });
             labelHtml = `
                 <div style="flex:2">
-                    <input list="ops-list-${row.id}" class="form-control" placeholder="Ketik/Pilih... (Ops)" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" value="${row.name || ''}" onchange="updateOpsRow('${row.id}', 'customName', this.value)">
+                    <input list="ops-list-${row.id}" class="form-control ops-col-name" onkeydown="handleVerticalTab(event, 'ops-col-name', 'ops-col-qty', null)" placeholder="Ketik/Pilih... (Ops)" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" value="${row.name || ''}" onchange="updateOpsRow('${row.id}', 'customName', this.value)">
                     <datalist id="ops-list-${row.id}">
                         ${options}
                     </datalist>
@@ -1798,10 +1831,10 @@ function renderOpsRows(data) {
             <div class="d-flex align-center" style="gap:1rem; margin-bottom:0.75rem;" data-id="${row.id}">
                 ${labelHtml}
                 <div style="flex:1">
-                    <input type="number" class="form-control" placeholder="Qty" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" step="0.01" min="0" value="${row.qty || ''}" oninput="updateOpsRow('${row.id}', 'qty', this.value)">
+                    <input type="number" class="form-control ops-col-qty" onkeydown="handleVerticalTab(event, 'ops-col-qty', 'ops-col-price', 'ops-col-name')" placeholder="Qty" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" step="0.01" min="0" value="${row.qty || ''}" oninput="updateOpsRow('${row.id}', 'qty', this.value)">
                 </div>
                 <div style="flex:1.5">
-                    <input type="text" class="form-control" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" value="${row.basePrice ? formatCurrency(row.basePrice) : 'Rp 0'}" onfocus="this.type='number'; this.value='${row.basePrice || ''}'" onblur="this.type='text'; updateOpsRow('${row.id}', 'basePrice', this.value)">
+                    <input type="text" class="form-control ops-col-price" onkeydown="handleVerticalTab(event, 'ops-col-price', null, 'ops-col-qty')" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" value="${row.basePrice ? formatCurrency(row.basePrice) : 'Rp 0'}" onfocus="this.type='number'; this.value='${row.basePrice || ''}'" onblur="this.type='text'; updateOpsRow('${row.id}', 'basePrice', this.value)">
                 </div>
                 <div style="flex:2">
                     <input type="text" class="form-control" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca; font-weight:600; text-align:right; font-size:0.8rem" value="${row.total ? formatCurrency(row.total) : 'Rp 0'}" readonly>
@@ -2392,8 +2425,15 @@ window.render_laporan = () => {
                 <label style="margin-bottom:0.25rem;">Sampai Tanggal</label>
                 <input type="date" id="filter-end" class="form-control" value="${sunday.toISOString().split('T')[0]}">
             </div>
-            <div class="d-flex align-center" style="margin-top:1.25rem;">
-                <button class="btn btn-primary" id="btn-filter-laporan" style="padding:0.625rem 1.5rem">Tampilkan Laporan</button>
+            <div class="d-flex align-center" style="margin-top:1.25rem; gap: 0.75rem;">
+                <button class="btn btn-primary" id="btn-filter-laporan" style="padding:0.625rem 1.5rem">
+                    <span class="material-symbols-outlined" style="font-size:18px; vertical-align:middle">bar_chart</span>
+                    Tampilkan Laporan
+                </button>
+                <button class="btn" onclick="openQuickPotonganModal()" style="padding:0.625rem 1.5rem; background:#f43f5e; color:white; border:none; border-radius:var(--radius-md); display:flex; align-items:center; gap:0.4rem; cursor:pointer; font-weight:500;">
+                    <span class="material-symbols-outlined" style="font-size:18px">content_cut</span>
+                    Tambah Potongan
+                </button>
             </div>
         </div>
         <div id="laporan-result"></div>
@@ -2749,4 +2789,38 @@ window.addQuickSetoran = () => {
 
     // Refresh report
     if (window.generateLaporan) window.generateLaporan();
+};
+
+// Tambah Potongan Cepat dari halaman Laporan Mingguan
+window.openQuickPotonganModal = () => {
+    // Ambil tanggal dari filter laporan jika tersedia, atau default ke minggu ini
+    const startEl = document.getElementById('filter-start');
+    const endEl = document.getElementById('filter-end');
+
+    let start, end;
+    if (startEl && startEl.value && endEl && endEl.value) {
+        start = startEl.value;
+        end = endEl.value;
+    } else {
+        // Default: minggu ini (Senin - Minggu)
+        const today = new Date();
+        const dayOfWeek = today.getDay();
+        const monday = new Date(today);
+        monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 6);
+        start = monday.toISOString().split('T')[0];
+        end = sunday.toISOString().split('T')[0];
+    }
+
+    bulkPotRows = [];
+    openBulkPotonganModal(start, end);
+
+    // Setelah modal ditutup, perbarui laporan jika terbuka
+    const origClose = window.closeModal;
+    window.closeModal = () => {
+        origClose();
+        window.closeModal = origClose;
+        if (window.generateLaporan) window.generateLaporan();
+    };
 };
