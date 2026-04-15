@@ -95,12 +95,20 @@ async function fetchAllDataFromSupabase() {
         ]);
 
         _cache = {
-            buyers: buyers || [],
-            drivers: drivers || [],
-            expenseTypes: expenseTypes || [],
-            settlements: settlements || [],
-            deductions: deductions || [],
-            transactions: transactions || []
+            buyers: (buyers || []).map(b => ({ ...b, unitPrice: b.unitprice })),
+            drivers: (drivers || []).map(d => ({ ...d, vehicleNumber: d.vehiclenumber })),
+            expenseTypes: (expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice })),
+            settlements: (settlements || []).map(s => ({ ...s, expenseTypeId: s.expensetypeid })),
+            deductions: (deductions || []).map(p => ({ ...p, dateStart: p.datestart, dateEnd: p.dateend, buyerId: p.buyerid })),
+            transactions: (transactions || []).map(t => ({
+                ...t,
+                buyerId: t.buyerid,
+                driverId: t.driverid,
+                totalAmount: t.totalamount,
+                operationalExpense: t.operationalexpense,
+                retributionExpense: t.retributionexpense,
+                expenseDetails: t.expenses // Map back to original name if needed
+            }))
         };
         
         console.log("✅ Data berhasil dimuat dari Supabase.");
@@ -666,7 +674,17 @@ function savePembeli() {
         data.buyers.push(item);
     }
 
-    saveData(data, 'buyers', item);
+    // Mapping for Supabase (lowercase columns)
+    const supabaseItem = { 
+        id: item.id, 
+        name: item.name, 
+        category: item.category, 
+        address: item.address, 
+        unit: item.unit, 
+        unitprice: item.unitPrice 
+    };
+
+    saveData(data, 'buyers', supabaseItem);
     closeModal();
     render_pembeli();
 }
@@ -765,7 +783,15 @@ function saveSopir() {
         data.drivers.push(item);
     }
 
-    saveData(data, 'drivers', item);
+    // Mapping for Supabase (lowercase columns)
+    const supabaseItem = {
+        id: item.id,
+        name: item.name,
+        vehiclenumber: item.vehicleNumber,
+        phone: item.phone
+    };
+
+    saveData(data, 'drivers', supabaseItem);
     closeModal();
     render_sopir();
 }
@@ -894,7 +920,17 @@ function savePengeluaran() {
         data.expenseTypes.push(item);
     }
 
-    saveData(data, 'expense_types', item);
+    // Mapping for Supabase (lowercase columns)
+    const supabaseItem = {
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        nature: item.nature,
+        unit: item.unit,
+        baseprice: item.basePrice
+    };
+
+    saveData(data, 'expense_types', supabaseItem);
     closeModal();
     render_pengeluaran();
 }
@@ -1243,7 +1279,18 @@ function savePotongan() {
         data.deductions.push(item);
     }
 
-    saveData(data, 'deductions', item);
+    // Mapping for Supabase (lowercase columns)
+    const supabaseItem = {
+        id: item.id,
+        jenis: item.jenis,
+        buyerid: item.buyerId,
+        datestart: item.dateStart,
+        dateend: item.dateEnd,
+        description: item.description,
+        amount: item.amount
+    };
+
+    saveData(data, 'deductions', supabaseItem);
     closeModal();
     render_potongan();
 }
@@ -1319,7 +1366,13 @@ window.saveSetoran = (id) => {
         data.settlements.push(item);
     }
 
-    saveData(data, 'settlements', item);
+    // Mapping for Supabase (lowercase columns)
+    const supabaseItem = {
+        id: item.id,
+        expensetypeid: item.expenseTypeId
+    };
+
+    saveData(data, 'settlements', supabaseItem);
     closeModal();
     render_potongan();
 };
@@ -2177,6 +2230,21 @@ function saveComplexTransaction(data) {
         created_at: new Date().toISOString()
     };
 
+    // Mapping for Supabase (lowercase columns)
+    const supabaseItem = {
+        id: transaction.id,
+        date: transaction.date,
+        buyerid: transaction.buyerId,
+        driverid: transaction.driverId,
+        totalamount: transaction.totalAmount,
+        operationalexpense: transaction.operationalExpense,
+        retributionexpense: transaction.retributionExpense,
+        status: transaction.status,
+        sales: transaction.sales,
+        expenses: transaction.expenses,
+        created_at: transaction.created_at
+    };
+
     if (currentEditTxId) {
         const idx = data.transactions.findIndex(t => t.id === currentEditTxId);
         if (idx > -1) {
@@ -2191,7 +2259,7 @@ function saveComplexTransaction(data) {
         alert('Penjualan ritase/harian berhasil disimpan!');
     }
 
-    saveData(data, 'transactions', transaction);
+    saveData(data, 'transactions', supabaseItem);
     render_penjualan();
 }
 
