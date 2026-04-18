@@ -106,7 +106,8 @@ async function fetchAllDataFromSupabase() {
                 driverId: t.driverid,
                 totalAmount: t.totalamount,
                 operationalExpense: t.operationalexpense,
-                retributionexpense: t.retributionexpense
+                retributionExpense: t.retributionexpense,
+                expenseDetails: t.expenses || []
             }))
         };
 
@@ -2396,7 +2397,7 @@ function saveComplexTransaction(data) {
         totalAmount,
         operationalExpense: totalOps,
         retributionExpense: totalRet,
-        expenses: [...opsDetails, ...retDetails],
+        expenseDetails: [...opsDetails, ...retDetails],
         status: 'Belum Lunas', // By default
         created_at: new Date().toISOString()
     };
@@ -2412,7 +2413,7 @@ function saveComplexTransaction(data) {
         retributionexpense: transaction.retributionExpense,
         status: transaction.status,
         sales: transaction.sales,
-        expenses: transaction.expenses,
+        expenses: transaction.expenseDetails,
         created_at: transaction.created_at
     };
 
