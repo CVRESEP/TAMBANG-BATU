@@ -63,7 +63,7 @@ function getData() {
     localStorage.setItem('session', JSON.stringify(user));
     currentUser = user;
     currentUser.profile = { role: 'Admin', full_name: 'Admin' };
-    document.getElementById('header-user-name').textContent = `${currentUser.profile.full_name} (${currentUser.profile.role})`;
+    document.getElementById('header-user-name').textContent = `${user.profile?.full_name || user.username} (${user.profile?.role || 'User'})`;
     const navUsers = document.getElementById('nav-users');
     if (navUsers) navUsers.style.display = 'flex';
 
