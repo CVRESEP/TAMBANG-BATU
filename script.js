@@ -1235,18 +1235,7 @@ function saveBulkPotongan() {
 
     saveData(data); // Full local sync
 
-    // Individual sync to Turso for added rows
-    if (window.tursoClient) {
-        const rowsToSync = data.deductions.slice(-added);
-        rowsToSync.forEach(row => {
-            // REMOVED SUPABASE CALL(row).then(({error}) => {
-                if (error) console.error("Gagal sync bulk potongan:", error);
-            });
-        });
-    }
-
-    closeModal();
-    render_potongan();
+    // Sync potongan via API\n    try {\n        const data = getData();\n        const added = parseInt(document.getElementById('total-added-count')?.value || 0);\n        if (added > 0) {\n            const rowsToSync = data.deductions.slice(-added);\n            for (const row of rowsToSync) {\n                await fetch('/api/sync', {\n                    method: 'POST',\n                    headers: { 'Content-Type': 'application/json' },\n                    body: JSON.stringify({ table: 'deductions', item: row })\n                });\n            }\n        }\n    } catch(e) {\n        console.error('Gagal sinkron potongan:', e);\n    }\n\n    closeModal();\n    render_potongan();
     alert(`Berhasil menyimpan ${added} data potongan.`);
 }
 
