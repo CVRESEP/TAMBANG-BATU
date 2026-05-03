@@ -28,43 +28,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// api/auth.js
-async function onRequestPost(context) {
-  const { request } = context;
-  try {
-    const body = await request.json();
-    const { username, password } = body;
-    if (username === "ADMIN" && password === "ADMIN") {
-      return new Response(JSON.stringify({
-        success: true,
-        user: {
-          username: "ADMIN",
-          id: "admin-id",
-          profile: {
-            full_name: "Administrator",
-            role: "Admin"
-          }
-        }
-      }), {
-        headers: { "Content-Type": "application/json" },
-        status: 200
-      });
-    }
-    return new Response(JSON.stringify({ error: "Username atau Password salah." }), {
-      headers: { "Content-Type": "application/json" },
-      status: 401
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: "Invalid request" }), { status: 400 });
-  }
-}
-var init_auth = __esm({
-  "api/auth.js"() {
-    init_functionsRoutes_0_7074094902891876();
-    __name(onRequestPost, "onRequestPost");
-  }
-});
-
 // ../node_modules/@libsql/core/lib-esm/api.js
 var LibsqlError, LibsqlBatchError;
 var init_api = __esm({
@@ -5505,6 +5468,59 @@ var init_web2 = __esm({
   }
 });
 
+// api/auth.js
+async function onRequestPost(context) {
+  const { env, request } = context;
+  try {
+    const body = await request.json();
+    const { username, password } = body;
+    if (username === "ADMIN" && password === "ADMIN") {
+      return new Response(JSON.stringify({
+        success: true,
+        user: { username: "ADMIN", id: "admin-id", profile: { full_name: "Administrator", role: "Admin" } }
+      }), { headers: { "Content-Type": "application/json" }, status: 200 });
+    }
+    const client = createClient({
+      url: env.TURSO_URL,
+      authToken: env.TURSO_AUTH_TOKEN
+    });
+    const result = await client.execute({
+      sql: "SELECT * FROM profiles WHERE email = ? AND password = ?",
+      args: [username, password]
+    });
+    if (result.rows.length > 0) {
+      const user = result.rows[0];
+      return new Response(JSON.stringify({
+        success: true,
+        user: {
+          username: user.email,
+          id: user.id,
+          profile: {
+            full_name: user.full_name,
+            role: user.role
+          }
+        }
+      }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    }
+    return new Response(JSON.stringify({ error: "Username atau Password salah." }), {
+      headers: { "Content-Type": "application/json" },
+      status: 401
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: "Terjadi kesalahan server: " + e.message }), { status: 500 });
+  }
+}
+var init_auth = __esm({
+  "api/auth.js"() {
+    init_functionsRoutes_0_7074094902891876();
+    init_web2();
+    __name(onRequestPost, "onRequestPost");
+  }
+});
+
 // api/sync.js
 async function onRequestGet(context) {
   const { env } = context;
@@ -5513,13 +5529,31 @@ async function onRequestGet(context) {
     authToken: env.TURSO_AUTH_TOKEN
   });
   try {
-    const [buyers, drivers, expenseTypes, settlements, deductions, transactions] = await Promise.all([
+    await client.execute(`
+            CREATE TABLE IF NOT EXISTS profiles (
+                id TEXT PRIMARY KEY,
+                full_name TEXT,
+                email TEXT UNIQUE,
+                role TEXT,
+                created_at TEXT
+            )
+        `);
+    try {
+      await client.execute(`ALTER TABLE profiles ADD COLUMN password TEXT`);
+    } catch (e) {
+    }
+  } catch (e) {
+    console.error("Migration failed:", e);
+  }
+  try {
+    const [buyers, drivers, expenseTypes, settlements, deductions, transactions, profiles] = await Promise.all([
       client.execute("SELECT * FROM buyers"),
       client.execute("SELECT * FROM drivers"),
       client.execute("SELECT * FROM expense_types"),
       client.execute("SELECT * FROM settlements"),
       client.execute("SELECT * FROM deductions"),
-      client.execute("SELECT * FROM transactions")
+      client.execute("SELECT * FROM transactions"),
+      client.execute("SELECT * FROM profiles")
     ]);
     return new Response(JSON.stringify({
       buyers: buyers.rows,
@@ -5527,7 +5561,8 @@ async function onRequestGet(context) {
       expenseTypes: expenseTypes.rows,
       settlements: settlements.rows,
       deductions: deductions.rows,
-      transactions: transactions.rows
+      transactions: transactions.rows,
+      profiles: profiles.rows
     }), {
       headers: { "Content-Type": "application/json" },
       status: 200
@@ -5640,10 +5675,10 @@ var init_functionsRoutes_0_7074094902891876 = __esm({
   }
 });
 
-// ../.wrangler/tmp/bundle-iRfoyQ/middleware-loader.entry.ts
+// ../.wrangler/tmp/bundle-5dJMa1/middleware-loader.entry.ts
 init_functionsRoutes_0_7074094902891876();
 
-// ../.wrangler/tmp/bundle-iRfoyQ/middleware-insertion-facade.js
+// ../.wrangler/tmp/bundle-5dJMa1/middleware-insertion-facade.js
 init_functionsRoutes_0_7074094902891876();
 
 // C:/Users/User/AppData/Local/npm-cache/_npx/32026684e21afda6/node_modules/wrangler/templates/pages-template-worker.ts
@@ -6139,7 +6174,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// ../.wrangler/tmp/bundle-iRfoyQ/middleware-insertion-facade.js
+// ../.wrangler/tmp/bundle-5dJMa1/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -6172,7 +6207,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// ../.wrangler/tmp/bundle-iRfoyQ/middleware-loader.entry.ts
+// ../.wrangler/tmp/bundle-5dJMa1/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

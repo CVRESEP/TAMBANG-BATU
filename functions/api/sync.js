@@ -2,19 +2,45 @@ import { createClient } from "@libsql/client/web";
 
 export async function onRequestGet(context) {
     const { env } = context;
+    
+    
     const client = createClient({
         url: env.TURSO_URL,
         authToken: env.TURSO_AUTH_TOKEN,
     });
 
+    // Auto-migrate profiles table
     try {
-        const [buyers, drivers, expenseTypes, settlements, deductions, transactions] = await Promise.all([
+        await client.execute(`
+            CREATE TABLE IF NOT EXISTS profiles (
+                id TEXT PRIMARY KEY,
+                full_name TEXT,
+                email TEXT UNIQUE,
+                role TEXT,
+                created_at TEXT
+            )
+        `);
+        // Ensure password column exists (SQLite doesn't support ADD COLUMN IF NOT EXISTS)
+        try {
+            await client.execute(`ALTER TABLE profiles ADD COLUMN password TEXT`);
+        } catch (e) {
+            // Column likely already exists, ignore
+        }
+    } catch (e) {
+        console.error("Migration failed:", e);
+    }
+
+
+
+    try {
+        const [buyers, drivers, expenseTypes, settlements, deductions, transactions, profiles] = await Promise.all([
             client.execute("SELECT * FROM buyers"),
             client.execute("SELECT * FROM drivers"),
             client.execute("SELECT * FROM expense_types"),
             client.execute("SELECT * FROM settlements"),
             client.execute("SELECT * FROM deductions"),
-            client.execute("SELECT * FROM transactions")
+            client.execute("SELECT * FROM transactions"),
+            client.execute("SELECT * FROM profiles")
         ]);
 
         return new Response(JSON.stringify({
@@ -24,6 +50,7 @@ export async function onRequestGet(context) {
             settlements: settlements.rows,
             deductions: deductions.rows,
             transactions: transactions.rows,
+            profiles: profiles.rows,
         }), {
             headers: { 'Content-Type': 'application/json' },
             status: 200

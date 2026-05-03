@@ -50,7 +50,8 @@ const defaultData = {
     expenseTypes: [],
     settlements: [],
     deductions: [],
-    transactions: []
+    transactions: [],
+    profiles: []
 };
 
 let _cache = null;
@@ -83,9 +84,9 @@ async function fetchAllDataFromTurso() {
         _cache = {
             buyers: (data.buyers || []).map(b => ({ ...b, unitPrice: b.unitprice })),
             drivers: (data.drivers || []).map(d => ({ ...d, vehicleNumber: d.vehiclenumber })),
-            expenseTypes: (data.expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice })),
-            settlements: data.settlements || [],
-            deductions: (data.deductions || []).map(d => ({ ...d, buyerId: d.buyerid })),
+            expenseTypes: (data.expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice, order: e.sort_order, linkedBuyerId: e.linked_buyer_id })),
+            settlements: (data.settlements || []).map(s => ({ ...s, expenseTypeId: s.expensetypeid })),
+            deductions: (data.deductions || []).map(d => ({ ...d, buyerId: d.buyerid, dateStart: d.date_start, dateEnd: d.date_end })),
             transactions: (data.transactions || []).map(t => ({
                 ...t,
                 buyerId: t.buyerid,
@@ -93,9 +94,23 @@ async function fetchAllDataFromTurso() {
                 totalAmount: t.totalamount,
                 operationalExpense: t.operationalexpense,
                 retributionExpense: t.retributionexpense,
-                expenseDetails: typeof t.expenses === 'string' ? JSON.parse(t.expenses) : (t.expenses || [])
-            }))
+                expenseDetails: typeof t.expenses === 'string' ? JSON.parse(t.expenses) : (t.expenses || []),
+                sales: typeof t.sales === 'string' ? JSON.parse(t.sales) : (t.sales || [])
+            })),
+            profiles: (data.profiles || []).map(p => ({ ...p, fullName: p.full_name }))
         };
+
+        // Seed default admin if totally empty
+        if (_cache.profiles.length === 0) {
+            _cache.profiles.push({
+                id: 'admin-default',
+                fullName: 'Administrator',
+                email: 'ADMIN',
+                role: 'Admin',
+                created_at: new Date().toISOString()
+            });
+        }
+
 
         saveData(_cache);
         console.log("✅ Data berhasil disinkronkan dari Turso.");
@@ -208,10 +223,14 @@ async function saveData(data, table = null, item = null) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ table, item })
             });
-            if (!response.ok) throw new Error('Network error');
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || 'Network error');
+            }
             console.log(`✅ Berhasil simpan ke Turso (${table})`);
         } catch (e) {
             console.error(`❌ Gagal simpan ke Turso (${table}):`, e);
+            alert(`Gagal menyimpan ke database cloud: ${e.message}. Perubahan mungkin hilang saat refresh.`);
         }
     }
 }
@@ -338,10 +357,16 @@ function _initApp() {
     const pStart = document.getElementById('filter-potongan-start');
     const pEnd = document.getElementById('filter-potongan-end');
     if (pStart && pEnd) {
-        const today = new Date().toISOString().split('T')[0];
-        const firstDay = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
-        pStart.value = firstDay;
-        pEnd.value = today;
+        // Default: minggu ini (Senin - Minggu)
+        const now = new Date();
+        const dayOfWeek = now.getDay();
+        const monday = new Date(now);
+        monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 6);
+        
+        pStart.value = monday.toISOString().split('T')[0];
+        pEnd.value = sunday.toISOString().split('T')[0];
         pStart.addEventListener('change', () => render_potongan_page());
         pEnd.addEventListener('change', () => render_potongan_page());
     }
@@ -366,26 +391,162 @@ if (document.readyState === 'loading') {
 // USER MANAGEMENT FUNCTIONS
 // ==========================================
 
-window.render_users = async () => {
+
+window.render_users = () => {
+    const data = getData();
     const tbody = document.getElementById('users-table-body');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="text-center">Manajemen user tersedia di dashboard Turso/Cloudflare</td></tr>';
+    if (!tbody) return;
+
+    if (!data.profiles || data.profiles.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Belum ada akun terdaftar</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = data.profiles.map(p => `
+        <tr>
+            <td>
+                <div class="d-flex align-center" style="gap:0.75rem">
+                    <div style="width:32px; height:32px; background:var(--primary-color); color:white; border-radius:50%; display:flex; align-center; justify-content:center; font-weight:600; font-size:0.8rem">
+                        ${p.fullName ? p.fullName.charAt(0).toUpperCase() : '?'}
+                    </div>
+                    <div>
+                        <div style="font-weight:600">${p.fullName || 'No Name'}</div>
+                        <div style="font-size:0.75rem; color:#64748b">${p.email || '-'}</div>
+                    </div>
+                </div>
+            </td>
+            <td><span class="badge" style="background:${p.role === 'Admin' ? '#f0fdf4' : '#f8fafc'}; color:${p.role === 'Admin' ? '#166534' : '#64748b'}; border:1px solid ${p.role === 'Admin' ? '#bbf7d0' : '#e2e8f0'}">${p.role || 'User'}</span></td>
+            <td>${p.created_at ? formatDate(p.created_at.split('T')[0]) : '-'}</td>
+            <td>
+                <div class="d-flex" style="gap: 0.5rem">
+                    <button class="btn-icon" style="color: var(--primary-color)" onclick="editUser('${p.id}')"><span class="material-symbols-outlined">edit</span></button>
+                    <button class="btn-icon" style="color: var(--danger)" onclick="deleteFromDatabase('profiles', '${p.id}'); let d=getData(); d.profiles=d.profiles.filter(x=>x.id!=='${p.id}'); saveData(d); render_users();"><span class="material-symbols-outlined">delete</span></button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
 };
 
 window.openAddUserModal = () => {
-    alert("Penambahan user baru dilakukan melalui dashboard Turso (Invite User). \n\nSetelah user menerima undangan, data profil akan otomatis tersedia.");
+    currentEditId = null;
+    const formHtml = `
+        <form id="form-user" autocomplete="off">
+            <div class="form-group">
+                <label>Nama Lengkap</label>
+                <input type="text" id="user-fullname" class="form-control" required>
+            </div>
+            <div class="form-group">
+                <label>Email / Username</label>
+                <input type="text" id="user-email" class="form-control" required>
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="user-password" class="form-control" placeholder="Isi password baru..." required>
+            </div>
+            <div class="form-group">
+                <label>Role</label>
+                <select id="user-role" class="form-control">
+                    <option value="Admin">Admin</option>
+                    <option value="User">User (Read Only)</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary">Simpan Akun</button>
+            </div>
+        </form>
+    `;
+    openModal('Tambah Akun Baru', formHtml);
+    document.getElementById('form-user').onsubmit = (e) => {
+        e.preventDefault();
+        saveUser();
+    };
 };
 
-window.editUser = async (profileId) => {
-    alert("Silakan gunakan dashboard Turso/Cloudflare untuk mengelola akun.");
+window.editUser = (id) => {
+    currentEditId = id;
+    const data = getData();
+    const p = data.profiles.find(x => x.id === id);
+    if (!p) return;
+
+    const formHtml = `
+        <form id="form-user" autocomplete="off">
+            <div class="form-group">
+                <label>Nama Lengkap</label>
+                <input type="text" id="user-fullname" class="form-control" value="${p.fullName || ''}" required>
+            </div>
+            <div class="form-group">
+                <label>Email / Username</label>
+                <input type="text" id="user-email" class="form-control" value="${p.email || ''}" required>
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="user-password" class="form-control" placeholder="Kosongkan jika tidak ingin ganti">
+            </div>
+            <div class="form-group">
+                <label>Role</label>
+                <select id="user-role" class="form-control">
+                    <option value="Admin" ${p.role === 'Admin' ? 'selected' : ''}>Admin</option>
+                    <option value="User" ${p.role === 'User' ? 'selected' : ''}>User (Read Only)</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary">Perbarui Akun</button>
+            </div>
+        </form>
+    `;
+    openModal('Edit Akun', formHtml);
+    document.getElementById('form-user').onsubmit = (e) => {
+        e.preventDefault();
+        saveUser(id);
+    };
 };
 
-// Add navigation listener for Users page
-document.addEventListener('click', (e) => {
-    const navLink = e.target.closest('.nav-link');
-    if (navLink && navLink.dataset.target === 'users') {
-        render_users();
+function saveUser(id = null) {
+    const fullName = document.getElementById('user-fullname').value;
+    const email = document.getElementById('user-email').value;
+    const password = document.getElementById('user-password').value;
+    const role = document.getElementById('user-role').value;
+
+    const data = getData();
+    if (!data.profiles) data.profiles = [];
+
+    let item;
+    if (id) {
+        const idx = data.profiles.findIndex(p => p.id === id);
+        if (idx > -1) {
+            const updated = { ...data.profiles[idx], fullName, email, role };
+            if (password) updated.password = password;
+            data.profiles[idx] = updated;
+            item = data.profiles[idx];
+        }
+    } else {
+        item = {
+            id: generateId(),
+            fullName,
+            email,
+            password,
+            role,
+            created_at: new Date().toISOString()
+        };
+        data.profiles.push(item);
     }
-});
+
+    const supabaseItem = {
+        id: item.id,
+        full_name: item.fullName,
+        email: item.email,
+        password: item.password,
+        role: item.role,
+        created_at: item.created_at
+    };
+
+    saveData(data, 'profiles', supabaseItem);
+    closeModal();
+    render_users();
+}
+
 
 // ==========================================
 // RENDER FUNCTIONS FOR PAGES
@@ -502,22 +663,30 @@ window.render_pengeluaran = () => {
         return;
     }
 
-    data.expenseTypes.forEach(exp => {
+    const sortedExpenses = [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0));
+    sortedExpenses.forEach((exp, index) => {
         const tr = document.createElement('tr');
         const natureColor = exp.nature === 'Pasti' ? 'var(--success)' : 'var(--danger)';
         const natureBg = exp.nature === 'Pasti' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)';
 
         tr.innerHTML = `
             <td><input type="checkbox" class="check-pengeluaran" data-id="${exp.id}"></td>
+            <td>${exp.order || 0}</td>
             <td><strong>${exp.name}</strong></td>
             <td><span style="display:inline-block; padding:0.25rem 0.5rem; border-radius:1rem; font-size:0.75rem; background:${exp.category === 'Operasional' ? 'rgba(79, 70, 229, 0.1)' : 'rgba(245, 158, 11, 0.1)'}; color:${exp.category === 'Operasional' ? 'var(--primary-color)' : 'var(--warning)'}">${exp.category}</span></td>
             <td><span style="display:inline-block; padding:0.25rem 0.5rem; border-radius:1rem; font-size:0.75rem; background:${natureBg}; color:${natureColor}; font-weight:600">${exp.nature || 'Tidak Pasti'}</span></td>
             <td>${exp.unit || '-'}</td>
             <td>${formatCurrency(exp.basePrice || 0)}</td>
             <td>
+                <select class="form-control form-control-sm" style="font-size:0.75rem; padding:0.2rem" onchange="updatePengeluaranLinkedBuyer('${exp.id}', this.value)">
+                    <option value="">- Tidak Konek -</option>
+                    ${getData().buyers.map(b => `<option value="${b.id}" ${b.id === exp.linkedBuyerId ? 'selected' : ''}>${b.name}</option>`).join('')}
+                </select>
+            </td>
+            <td>
                 <div class="d-flex" style="gap: 0.5rem">
                     <button class="btn-icon" style="color: var(--primary-color)" onclick="editPengeluaran('${exp.id}')"><span class="material-symbols-outlined">edit</span></button>
-                    <button class="btn-icon" style="color: var(--danger)" onclick="deletePengeluaran('${exp.id}')"><span class="material-symbols-outlined">delete</span></button>
+                    <button class="btn-icon" style="color: var(--danger)" onclick="deleteFromDatabase('expense_types', '${exp.id}')"><span class="material-symbols-outlined">delete</span></button>
                 </div>
             </td>
         `;
@@ -534,7 +703,8 @@ window.render_potongan = () => {
     // Populate Type Filter if empty
     const sType = document.getElementById('filter-setoran-type');
     if (sType && sType.options.length <= 1) {
-        data.expenseTypes.forEach(e => {
+        const sortedTypes = [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0));
+    sortedTypes.forEach(e => {
             const opt = document.createElement('option');
             opt.value = e.id;
             opt.textContent = e.name;
@@ -777,6 +947,12 @@ function savePembeli() {
 
     const data = getData();
     let item;
+    const expTypes = data.expenseTypes;
+    let oldLinkedBuyerId = null;
+    if (currentEditId) {
+        const oldExp = expTypes.find(e => e.id === currentEditId);
+        if (oldExp) oldLinkedBuyerId = oldExp.linkedBuyerId || null;
+    }
 
     if (currentEditId) {
         const index = data.buyers.findIndex(b => b.id === currentEditId);
@@ -789,14 +965,15 @@ function savePembeli() {
         data.buyers.push(item);
     }
 
+    
     // Mapping for Turso (lowercase columns)
-    const supabaseItem = { 
-        id: item.id, 
-        name: item.name, 
-        category: item.category, 
-        address: item.address, 
-        unit: item.unit, 
-        unitprice: item.unitPrice 
+    const supabaseItem = {
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        address: item.address,
+        unit: item.unit,
+        unitprice: item.unitPrice
     };
 
     saveData(data, 'buyers', supabaseItem);
@@ -805,7 +982,7 @@ function savePembeli() {
 }
 
 window.deletePembeli = (id) => {
-    if (confirm('Apakah Anda yakin ingin menghapus data pembeli ini?')) {
+    if (confirm('Apakah Anda yakin ingin menghapus pembeli ini?')) {
         const data = getData();
         data.buyers = data.buyers.filter(b => b.id !== id);
         saveData(data);
@@ -813,6 +990,19 @@ window.deletePembeli = (id) => {
         render_pembeli();
     }
 };
+
+
+window.deletePengeluaran = (id) => {
+    if (confirm('Apakah Anda yakin ingin menghapus jenis pengeluaran ini?')) {
+        const data = getData();
+        data.expenseTypes = data.expenseTypes.filter(e => e.id !== id);
+        saveData(data);
+        deleteFromDatabase('expense_types', id);
+        render_pengeluaran();
+    }
+};
+
+
 
 // --- Sopir ---
 document.getElementById('btn-add-sopir').addEventListener('click', () => {
@@ -824,11 +1014,11 @@ document.getElementById('btn-add-sopir').addEventListener('click', () => {
                 <input type="text" id="sopir-name" class="form-control" required>
             </div>
             <div class="form-group">
-                <label>No. Kendaraan</label>
-                <input type="text" id="sopir-vehicle" class="form-control" required>
+                <label>No. Polisi Kendaraan</label>
+                <input type="text" id="sopir-vehicle" class="form-control" required placeholder="Contoh: BE 1234 ABC">
             </div>
             <div class="form-group">
-                <label>No. HP</label>
+                <label>No. WhatsApp / HP</label>
                 <input type="text" id="sopir-phone" class="form-control" required>
             </div>
             <div class="form-actions">
@@ -858,11 +1048,11 @@ window.editSopir = (id) => {
                 <input type="text" id="sopir-name" class="form-control" value="${driver.name}" required>
             </div>
             <div class="form-group">
-                <label>No. Kendaraan</label>
+                <label>No. Polisi Kendaraan</label>
                 <input type="text" id="sopir-vehicle" class="form-control" value="${driver.vehicleNumber}" required>
             </div>
             <div class="form-group">
-                <label>No. HP</label>
+                <label>No. WhatsApp / HP</label>
                 <input type="text" id="sopir-phone" class="form-control" value="${driver.phone}" required>
             </div>
             <div class="form-actions">
@@ -886,6 +1076,12 @@ function saveSopir() {
 
     const data = getData();
     let item;
+    const expTypes = data.expenseTypes;
+    let oldLinkedBuyerId = null;
+    if (currentEditId) {
+        const oldExp = expTypes.find(e => e.id === currentEditId);
+        if (oldExp) oldLinkedBuyerId = oldExp.linkedBuyerId || null;
+    }
 
     if (currentEditId) {
         const index = data.drivers.findIndex(d => d.id === currentEditId);
@@ -898,7 +1094,6 @@ function saveSopir() {
         data.drivers.push(item);
     }
 
-    // Mapping for Turso (lowercase columns)
     const supabaseItem = {
         id: item.id,
         name: item.name,
@@ -912,7 +1107,7 @@ function saveSopir() {
 }
 
 window.deleteSopir = (id) => {
-    if (confirm('Apakah Anda yakin ingin menghapus data sopir ini?')) {
+    if (confirm('Hapus data sopir ini?')) {
         const data = getData();
         data.drivers = data.drivers.filter(d => d.id !== id);
         saveData(data);
@@ -921,14 +1116,21 @@ window.deleteSopir = (id) => {
     }
 };
 
+
 // --- Pengeluaran ---
 document.getElementById('btn-add-pengeluaran').addEventListener('click', () => {
     currentEditId = null;
+    const data = getData();
+    let maxOrder = 0;
+    if (data.expenseTypes && data.expenseTypes.length > 0) {
+        maxOrder = Math.max(...data.expenseTypes.map(e => parseInt(e.order) || 0));
+    }
+    const nextOrder = maxOrder + 1;
     const formHtml = `
         <form id="form-pengeluaran" autocomplete="off">
             <div class="form-group">
                 <label>Nama Pengeluaran</label>
-                <input type="text" id="pengeluaran-name" class="form-control" required>
+                <input type="text" id="pengeluaran-name" class="form-control" oninput="this.value = this.value.toUpperCase()" required>
             </div>
             <div class="form-group">
                 <label>Kategori</label>
@@ -937,6 +1139,8 @@ document.getElementById('btn-add-pengeluaran').addEventListener('click', () => {
                     <option value="Retribusi">Retribusi</option>
                 </select>
             </div>
+            
+            
             <div class="form-group">
                 <label>Sifat Pengeluaran</label>
                 <select id="pengeluaran-nature" class="form-control" required>
@@ -946,11 +1150,15 @@ document.getElementById('btn-add-pengeluaran').addEventListener('click', () => {
             </div>
             <div class="form-group">
                 <label>Satuan (Misal: Ritase, Liter, Orang, dll)</label>
-                <input type="text" id="pengeluaran-unit" class="form-control" required>
+                <input type="text" id="pengeluaran-unit" class="form-control" oninput="this.value = this.value.toUpperCase()" required>
             </div>
             <div class="form-group">
                 <label>Harga Satuan / Patokan Harga (Rp)</label>
                 <input type="number" id="pengeluaran-price" class="form-control" required value="0">
+            </div>
+            <div class="form-group">
+                <label>No Urut (Tampilan di Form Penjualan)</label>
+                <input type="number" id="pengeluaran-order" class="form-control" value="${nextOrder}">
             </div>
             <div class="form-actions">
                 <button type="button" class="btn" onclick="closeModal()">Batal</button>
@@ -974,9 +1182,10 @@ window.editPengeluaran = (id) => {
 
     const formHtml = `
         <form id="form-pengeluaran" autocomplete="off">
+            
             <div class="form-group">
                 <label>Nama Pengeluaran</label>
-                <input type="text" id="pengeluaran-name" class="form-control" value="${exp.name}" required>
+                <input type="text" id="pengeluaran-name" class="form-control" value="${exp.name}" oninput="this.value = this.value.toUpperCase()" required>
             </div>
             <div class="form-group">
                 <label>Kategori</label>
@@ -994,11 +1203,15 @@ window.editPengeluaran = (id) => {
             </div>
             <div class="form-group">
                 <label>Satuan (Misal: Ritase, Liter, Orang, dll)</label>
-                <input type="text" id="pengeluaran-unit" class="form-control" value="${exp.unit || ''}" required>
+                <input type="text" id="pengeluaran-unit" class="form-control" value="${exp.unit || ''}" oninput="this.value = this.value.toUpperCase()" required>
             </div>
             <div class="form-group">
                 <label>Harga Satuan / Patokan Harga (Rp)</label>
                 <input type="number" id="pengeluaran-price" class="form-control" value="${exp.basePrice || 0}" required>
+            </div>
+            <div class="form-group">
+                <label>No Urut (Tampilan di Form Penjualan)</label>
+                <input type="number" id="pengeluaran-order" class="form-control" value="${exp.order || 0}">
             </div>
             <div class="form-actions">
                 <button type="button" class="btn" onclick="closeModal()">Batal</button>
@@ -1015,34 +1228,43 @@ window.editPengeluaran = (id) => {
 };
 
 function savePengeluaran() {
-    const name = document.getElementById('pengeluaran-name').value;
+    const name = document.getElementById('pengeluaran-name').value.toUpperCase();
     const category = document.getElementById('pengeluaran-category').value;
     const nature = document.getElementById('pengeluaran-nature').value;
-    const unit = document.getElementById('pengeluaran-unit').value;
+    const unit = document.getElementById('pengeluaran-unit').value.toUpperCase();
     const basePrice = parseFloat(document.getElementById('pengeluaran-price').value) || 0;
+    const order = parseInt(document.getElementById('pengeluaran-order').value) || 0;
+    const linkedBuyerId = item?.linkedBuyerId || null;
 
     const data = getData();
     let item;
+    const expTypes = data.expenseTypes;
+    let oldLinkedBuyerId = null;
+    if (currentEditId) {
+        const oldExp = expTypes.find(e => e.id === currentEditId);
+        if (oldExp) oldLinkedBuyerId = oldExp.linkedBuyerId || null;
+    }
 
     if (currentEditId) {
         const index = data.expenseTypes.findIndex(e => e.id === currentEditId);
         if (index > -1) {
-            data.expenseTypes[index] = { ...data.expenseTypes[index], name, category, nature, unit, basePrice };
+            data.expenseTypes[index] = { ...data.expenseTypes[index], name, category, nature, unit, basePrice, order, linkedBuyerId: oldLinkedBuyerId };
             item = data.expenseTypes[index];
         }
     } else {
-        item = { id: generateId(), name, category, nature, unit, basePrice };
+        item = { id: generateId(), name, category, nature, unit, basePrice, order, linkedBuyerId: null };
         data.expenseTypes.push(item);
     }
 
-    // Mapping for Turso (lowercase columns)
     const supabaseItem = {
         id: item.id,
         name: item.name,
         category: item.category,
         nature: item.nature,
         unit: item.unit,
-        baseprice: item.basePrice
+        baseprice: item.basePrice,
+        sort_order: item.order,
+        linked_buyer_id: item.linkedBuyerId
     };
 
     saveData(data, 'expense_types', supabaseItem);
@@ -1050,15 +1272,6 @@ function savePengeluaran() {
     render_pengeluaran();
 }
 
-window.deletePengeluaran = (id) => {
-    if (confirm('Apakah Anda yakin ingin menghapus jenis pengeluaran ini?')) {
-        const data = getData();
-        data.expenseTypes = data.expenseTypes.filter(e => e.id !== id);
-        saveData(data);
-        deleteFromDatabase('expense_types', id);
-        render_pengeluaran();
-    }
-};
 
 // --- Potongan ---
 let bulkPotRows = [];
@@ -1100,13 +1313,17 @@ function openBulkPotonganModal(start, end) {
 
     const formHtml = `
         <div id="bulk-potongan-container">
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom: 1.5rem; background:#f8fafc; padding:1rem; border-radius:0.5rem; border:1px solid #e2e8f0;">
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; margin-bottom: 1.5rem; background:#f8fafc; padding:1rem; border-radius:0.5rem; border:1px solid #e2e8f0;">
                 <div class="form-group" style="margin:0">
-                    <label style="font-size:0.75rem; font-weight:600">Dari Tanggal</label>
+                    <label style="font-size:0.75rem; font-weight:600">Tanggal Potongan</label>
+                    <input type="date" id="bulk-potongan-date" class="form-control" value="${new Date().toISOString().split('T')[0]}">
+                </div>
+                <div class="form-group" style="margin:0">
+                    <label style="font-size:0.75rem; font-weight:600">Dari Tanggal (Penjualan)</label>
                     <input type="date" id="bulk-date-start" class="form-control" value="${start}" onchange="refreshBulkModal()">
                 </div>
                 <div class="form-group" style="margin:0">
-                    <label style="font-size:0.75rem; font-weight:600">Sampai Tanggal</label>
+                    <label style="font-size:0.75rem; font-weight:600">Sampai Tanggal (Penjualan)</label>
                     <input type="date" id="bulk-date-end" class="form-control" value="${end}" onchange="refreshBulkModal()">
                 </div>
             </div>
@@ -1205,7 +1422,7 @@ window.removeBulkRow = (id) => {
     window.refreshBulkModal();
 };
 
-function saveBulkPotongan() {
+async function saveBulkPotongan() {
     const data = getData();
     const start = document.getElementById('bulk-date-start').value;
     const end = document.getElementById('bulk-date-end').value;
@@ -1219,8 +1436,7 @@ function saveBulkPotongan() {
                 id: generateId(),
                 jenis: 'Potongan Penjualan',
                 buyerId: row.buyerId,
-                dateStart: start,
-                dateEnd: end,
+                date: document.getElementById("bulk-potongan-date").value, dateStart: start, dateEnd: end,
                 description: row.description || `Potongan ${start}-${end}`,
                 amount: row.amount
             });
@@ -1235,7 +1451,26 @@ function saveBulkPotongan() {
 
     saveData(data); // Full local sync
 
-    // Sync potongan via API\n    try {\n        const data = getData();\n        const added = parseInt(document.getElementById('total-added-count')?.value || 0);\n        if (added > 0) {\n            const rowsToSync = data.deductions.slice(-added);\n            for (const row of rowsToSync) {\n                await fetch('/api/sync', {\n                    method: 'POST',\n                    headers: { 'Content-Type': 'application/json' },\n                    body: JSON.stringify({ table: 'deductions', item: row })\n                });\n            }\n        }\n    } catch(e) {\n        console.error('Gagal sinkron potongan:', e);\n    }\n\n    closeModal();\n    render_potongan();
+    // Sync potongan via API
+    try {
+        const data = getData();
+        const added = parseInt(document.getElementById('total-added-count')?.value || 0);
+        if (added > 0) {
+            const rowsToSync = data.deductions.slice(-added);
+            for (const row of rowsToSync) {
+                await fetch('/api/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ table: 'deductions', item: row })
+                });
+            }
+        }
+    } catch(e) {
+        console.error('Gagal sinkron potongan:', e);
+    }
+
+    closeModal();
+    render_potongan();
     alert(`Berhasil menyimpan ${added} data potongan.`);
 }
 
@@ -1371,6 +1606,12 @@ function savePotongan() {
 
     const potData = { jenis, buyerId, dateStart, dateEnd, description, amount };
     let item;
+    const expTypes = data.expenseTypes;
+    let oldLinkedBuyerId = null;
+    if (currentEditId) {
+        const oldExp = expTypes.find(e => e.id === currentEditId);
+        if (oldExp) oldLinkedBuyerId = oldExp.linkedBuyerId || null;
+    }
 
     if (currentEditId) {
         const index = data.deductions.findIndex(p => p.id === currentEditId);
@@ -1420,7 +1661,7 @@ window.editSetoran = (id) => {
 window.openSetoranModal = (item = null) => {
     const data = getData();
     const title = item ? 'Edit Setoran' : 'Tambah Setoran';
-    const categories = data.expenseTypes.map(e => `<option value="${e.id}" ${item && item.expenseTypeId === e.id ? 'selected' : ''}>${e.name}</option>`).join('');
+    const categories = [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0)).map(e => `<option value="${e.id}" ${item && item.expenseTypeId === e.id ? 'selected' : ''}>${e.name}</option>`).join('');
 
     const contentHtml = `
         <form id="form-setoran" autocomplete="off">
@@ -1459,6 +1700,12 @@ window.saveSetoran = (id) => {
     }
 
     let item;
+    const expTypes = data.expenseTypes;
+    let oldLinkedBuyerId = null;
+    if (currentEditId) {
+        const oldExp = expTypes.find(e => e.id === currentEditId);
+        if (oldExp) oldLinkedBuyerId = oldExp.linkedBuyerId || null;
+    }
     if (id) {
         const index = data.settlements.findIndex(s => s.id === id);
         if (index > -1) {
@@ -1499,12 +1746,60 @@ let penjualanRows = [];
 let opsExpenseRows = [];
 let retExpenseRows = [];
 
+
+function getWeekLabel(dateString) {
+    const parts = dateString.split('-');
+    const date = new Date(parts[0], parts[1] - 1, parts[2]);
+    const day = date.getDay();
+    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+    const monday = new Date(date.setDate(diff));
+    const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+    
+    const fmt = (d) => {
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yy = d.getFullYear();
+        return `${dd}/${mm}/${yy}`;
+    };
+    
+    return `${fmt(monday)} - ${fmt(sunday)}`;
+}
+
+
+window.shiftWeek = (direction) => {
+    const select = document.getElementById('penjualan-week-filter');
+    if (!select || select.options.length === 0) return;
+    
+    let currentIndex = select.selectedIndex;
+    // index 0 is "Semua Tanggal"
+    // index 1 is newest week
+    // direction -1 = Prev (older) -> index increases
+    // direction 1 = Next (newer) -> index decreases
+    
+    let newIndex = currentIndex;
+    
+    if (direction === -1) {
+        if (currentIndex === 0) newIndex = 1; // if 'All', go to newest week
+        else newIndex = currentIndex + 1; // Go older
+    } else if (direction === 1) {
+        if (currentIndex === 0) return; // 'All' has no newer
+        newIndex = currentIndex - 1; // Go newer
+        if (newIndex === 0) newIndex = 1; // prevent auto jumping to 'All' when going next
+    }
+    
+    if (newIndex >= 1 && newIndex < select.options.length) {
+        select.selectedIndex = newIndex;
+        render_penjualan();
+    }
+};
+
 window.render_penjualan = () => {
     const data = getData();
 
     // Ensure base pricing for expenses
     let modified = false;
-    data.expenseTypes.forEach(e => {
+    const sortedTypes = [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0));
+    sortedTypes.forEach(e => {
         if (e.basePrice === undefined) {
             e.basePrice = 0;
             modified = true;
@@ -1518,16 +1813,61 @@ window.render_penjualan = () => {
     const tbodyList = document.getElementById('tbody-penjualan-list');
     const formContainer = document.getElementById('penjualan-form-container');
 
+    // Pagination / Week Filter Logic
+    const weekSelect = document.getElementById('penjualan-week-filter');
+    const allTransactions = [...data.transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+    
+    // Only populate if empty to preserve user selection across renders
+    if (weekSelect && weekSelect.options.length === 0) {
+        const weeks = new Set();
+        allTransactions.forEach(tx => {
+            if(tx.date) weeks.add(getWeekLabel(tx.date));
+        });
+        
+        const weeksArray = Array.from(weeks);
+        
+        // Ensure current week is in the list
+        const todayStr = new Date().toISOString().split('T')[0];
+        const currentWeekLabel = getWeekLabel(todayStr);
+        if (!weeksArray.includes(currentWeekLabel)) {
+            weeksArray.unshift(currentWeekLabel);
+        }
+        
+        weekSelect.innerHTML = '<option value="all">Semua Tanggal</option>';
+        weeksArray.forEach(w => {
+            weekSelect.innerHTML += `<option value="${w}">${w}</option>`;
+        });
+        
+        weekSelect.value = currentWeekLabel;
+    }
+
+    const selectedWeek = weekSelect ? weekSelect.value : 'all';
+    let filteredTransactions = allTransactions;
+    if (selectedWeek !== 'all') {
+        filteredTransactions = allTransactions.filter(tx => tx.date && getWeekLabel(tx.date) === selectedWeek);
+    }
+
+    // Update Button states
+    const btnPrev = document.getElementById('btn-prev-week');
+    const btnNext = document.getElementById('btn-next-week');
+    if (weekSelect && btnPrev && btnNext) {
+        const idx = weekSelect.selectedIndex;
+        btnNext.disabled = (idx <= 1);
+        btnPrev.disabled = (idx >= weekSelect.options.length - 1);
+        btnNext.style.opacity = btnNext.disabled ? '0.5' : '1';
+        btnPrev.style.opacity = btnPrev.disabled ? '0.5' : '1';
+    }
+
     // Switch to List View
     listView.style.display = 'block';
     formView.style.display = 'none';
 
     // Render List
     tbodyList.innerHTML = '';
-    if (data.transactions.length === 0) {
-        tbodyList.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Belum ada transaksi</td></tr>';
+    if (filteredTransactions.length === 0) {
+        tbodyList.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Belum ada transaksi di minggu ini</td></tr>';
     } else {
-        data.transactions.forEach(tx => {
+        filteredTransactions.forEach(tx => {
             let rincianInfo = '';
             if (tx.sales) {
                 rincianInfo = tx.sales.length + ' Baris Barang';
@@ -1611,24 +1951,43 @@ window.deleteTransaksi = (id) => {
 
 function initSalesForm(container, data, txToEdit = null) {
     if (txToEdit) {
-        // Load existing
-        penjualanRows = txToEdit.sales.map(s => ({
+        // Ensure sales is parsed
+        const txSales = typeof txToEdit.sales === 'string' ? JSON.parse(txToEdit.sales) : (txToEdit.sales || []);
+        
+        penjualanRows = txSales.map(s => ({
             id: generateId(), buyerId: s.buyerId, qty: s.qty, unitPrice: (s.qty > 0 ? s.total / s.qty : 0), total: s.total, driverCount: s.driverCount || 1
         }));
 
         opsExpenseRows = [];
-        data.expenseTypes.filter(e => e.category === 'Operasional').forEach(e => {
-            const detail = txToEdit.expenseDetails.find(d => d.expenseId === e.id);
+        const txExpenses = typeof txToEdit.expenseDetails === 'string' ? JSON.parse(txToEdit.expenseDetails) : (txToEdit.expenseDetails || []);
+        
+        // 1. Load Master Expenses
+        const masterOps = [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0)).filter(e => e.category === 'Operasional');
+        masterOps.forEach(e => {
+            const detail = txExpenses.find(d => d.expenseId === e.id);
             if (detail) {
                 opsExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: (detail.qty > 0 ? detail.amount / detail.qty : e.basePrice || 0), qty: detail.qty, total: detail.amount });
             } else {
                 opsExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: e.basePrice || 0, qty: 0, total: 0 });
             }
         });
+        // 2. Load Manual Expenses (No expenseId or not in masterOps)
+        txExpenses.forEach(d => {
+            const isManual = !d.expenseId || !masterOps.some(e => e.id === d.expenseId);
+            // Check if it's actually an Operational expense (we check the master data of all types)
+            const masterType = data.expenseTypes.find(e => e.id === d.expenseId);
+            if (isManual && (!masterType || masterType.category === 'Operasional')) {
+                // If we have both name and amount, and it's not already in opsExpenseRows (by expenseId), it might be manual
+                // But we don't want to double-count. However, manual ones have expenseId = null.
+                if (!d.expenseId) {
+                    opsExpenseRows.push({ id: generateId(), expenseId: null, name: d.name || 'Manual', nature: 'Tidak Pasti', basePrice: (d.qty > 0 ? d.amount / d.qty : 0), qty: d.qty, total: d.amount });
+                }
+            }
+        });
 
         retExpenseRows = [];
-        data.expenseTypes.filter(e => e.category === 'Retribusi').forEach(e => {
-            const detail = txToEdit.expenseDetails.find(d => d.expenseId === e.id);
+        [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0)).filter(e => e.category === 'Retribusi').forEach(e => {
+            const detail = txExpenses.find(d => d.expenseId === e.id);
             if (detail) {
                 retExpenseRows.push({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: (detail.qty > 0 ? detail.amount / detail.qty : e.basePrice || 0), qty: detail.qty, total: detail.amount });
             } else {
@@ -1640,11 +1999,13 @@ function initSalesForm(container, data, txToEdit = null) {
         penjualanRows = [{ id: generateId(), buyerId: '', qty: 0, total: 0, driverCount: 1 }];
 
         // Populate default ops and ret expenses from master data
-        opsExpenseRows = data.expenseTypes
+        opsExpenseRows = [...data.expenseTypes]
+            .sort((a, b) => (a.order || 0) - (b.order || 0))
             .filter(e => e.category === 'Operasional')
             .map(e => ({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: e.basePrice || 0, qty: 0, total: 0 }));
 
-        retExpenseRows = data.expenseTypes
+        retExpenseRows = [...data.expenseTypes]
+            .sort((a, b) => (a.order || 0) - (b.order || 0))
             .filter(e => e.category === 'Retribusi')
             .map(e => ({ id: generateId(), expenseId: e.id, name: e.name, nature: e.nature, basePrice: e.basePrice || 0, qty: 0, total: 0 }));
     }
@@ -1795,6 +2156,54 @@ function calculateTotalRitase() {
     return total;
 }
 
+
+window.syncLinkedExpensesQty = () => {
+    let updated = false;
+    const data = getData();
+    
+    // Check opsExpenseRows
+    if (typeof opsExpenseRows !== 'undefined') {
+        opsExpenseRows.forEach(r => {
+            const expData = data.expenseTypes.find(e => e.id === r.expenseId);
+            if (expData && expData.linkedBuyerId) {
+                const totalQty = penjualanRows
+                    .filter(pr => pr.buyerId === expData.linkedBuyerId)
+                    .reduce((acc, pr) => acc + (pr.qty || 0), 0);
+                    
+                if (r.qty !== totalQty) {
+                    r.qty = totalQty;
+                    r.total = r.qty * (r.basePrice || 0);
+                    updated = true;
+                }
+            }
+        });
+    }
+
+    // Check retExpenseRows
+    if (typeof retExpenseRows !== 'undefined') {
+        retExpenseRows.forEach(r => {
+            const expData = data.expenseTypes.find(e => e.id === r.expenseId);
+            if (expData && expData.linkedBuyerId) {
+                const totalQty = penjualanRows
+                    .filter(pr => pr.buyerId === expData.linkedBuyerId)
+                    .reduce((acc, pr) => acc + (pr.qty || 0), 0);
+                    
+                if (r.qty !== totalQty) {
+                    r.qty = totalQty;
+                    r.total = r.qty * (r.basePrice || 0);
+                    updated = true;
+                }
+            }
+        });
+    }
+
+    if (updated) {
+        if (typeof renderOpsRows === 'function') renderOpsRows(data);
+        if (typeof renderRetRows === 'function') renderRetRows(data);
+        if (window.updateNetProfitSummary) window.updateNetProfitSummary();
+    }
+};
+
 function syncRetribusiQty() {
     let totalRit = calculateTotalRitase();
     let updated = false;
@@ -1941,6 +2350,7 @@ window.updateSalesRow = (id, field, value) => {
         }
     }
     if (typeof syncRetribusiQty === 'function') syncRetribusiQty();
+    if (typeof window.syncLinkedExpensesQty === 'function') window.syncLinkedExpensesQty();
 };
 
 window.openSetoranDetail = (id) => {
@@ -2011,6 +2421,7 @@ window.removeSalesRow = (id) => {
     penjualanRows = penjualanRows.filter(r => r.id !== id);
     renderSalesRows(getData());
     if (typeof syncRetribusiQty === 'function') syncRetribusiQty();
+    if (typeof window.syncLinkedExpensesQty === 'function') window.syncLinkedExpensesQty();
 };
 
 window.handleVerticalTab = function(e, colClass, nextColClass, prevColClass) {
@@ -2066,7 +2477,7 @@ function renderOpsRows(data) {
             labelHtml = `<div style="flex:2; font-size:0.75rem; font-weight:600; text-transform:uppercase; margin-top:0.5rem;">${row.name}</div>`;
         } else {
             let options = '';
-            data.expenseTypes.filter(e => e.category === 'Operasional').forEach(e => {
+            [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0)).filter(e => e.category === 'Operasional').forEach(e => {
                 options += `<option value="${e.name}">`;
             });
             labelHtml = `
@@ -2140,10 +2551,8 @@ window.updateOpsRow = (id, field, value) => {
                 row.expenseId = exp.id;
                 row.basePrice = exp.basePrice || 0;
             } else {
-                const newExp = { id: generateId(), name: row.name, category: 'Operasional', unit: '', basePrice: 0 };
-                data.expenseTypes.push(newExp);
-                saveData(data);
-                row.expenseId = newExp.id;
+                // Do NOT save to master data
+                row.expenseId = null;
                 row.basePrice = 0;
             }
         }
@@ -2187,7 +2596,7 @@ function renderRetRows(data) {
             labelHtml = `<div style="flex:2; font-size:0.75rem; font-weight:600; text-transform:uppercase; margin-top:0.5rem;">${row.name}</div>`;
         } else {
             let options = '';
-            data.expenseTypes.filter(e => e.category === 'Retribusi').forEach(e => {
+            [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0)).filter(e => e.category === 'Retribusi').forEach(e => {
                 options += `<option value="${e.name}">`;
             });
             labelHtml = `
@@ -2261,10 +2670,8 @@ window.updateRetRow = (id, field, value) => {
                 row.expenseId = exp.id;
                 row.basePrice = exp.basePrice || 0;
             } else {
-                const newExp = { id: generateId(), name: row.name, category: 'Retribusi', unit: '', basePrice: 0 };
-                data.expenseTypes.push(newExp);
-                saveData(data);
-                row.expenseId = newExp.id;
+                // Do NOT save to master data
+                row.expenseId = null;
                 row.basePrice = 0;
             }
         }
@@ -2298,15 +2705,15 @@ function saveComplexTransaction(data) {
     }
 
     let totalOps = 0;
-    const opsDetails = opsExpenseRows.filter(r => r.qty > 0 && r.expenseId).map(r => {
+    const opsDetails = opsExpenseRows.filter(r => r.qty > 0 && (r.expenseId || r.name)).map(r => {
         totalOps += r.total;
-        return { expenseId: r.expenseId, qty: r.qty, amount: r.total };
+        return { expenseId: r.expenseId, name: r.name, qty: r.qty, amount: r.total };
     });
 
     let totalRet = 0;
-    const retDetails = retExpenseRows.filter(r => r.qty > 0 && r.expenseId).map(r => {
+    const retDetails = retExpenseRows.filter(r => r.qty > 0 && (r.expenseId || r.name)).map(r => {
         totalRet += r.total;
-        return { expenseId: r.expenseId, qty: r.qty, amount: r.total };
+        return { expenseId: r.expenseId, name: r.name, qty: r.qty, amount: r.total };
     });
 
     const totalAmount = validSales.reduce((acc, row) => acc + row.total, 0);
@@ -2346,8 +2753,7 @@ function saveComplexTransaction(data) {
         retributionexpense: transaction.retributionExpense,
         status: transaction.status,
         sales: transaction.sales,
-        expenses: transaction.expenseDetails,
-        created_at: transaction.created_at
+        expenses: transaction.expenseDetails
     };
 
     if (currentEditTxId) {
@@ -3236,3 +3642,52 @@ async function executeBulkDelete(config, ids) {
 // Add these to window so they are accessible if needed
 window.initBulkDeleteListeners = initBulkDeleteListeners;
 window.updateBulkDeleteButton = updateBulkDeleteButton;
+
+
+window.updatePengeluaranLinkedBuyer = (id, buyerId) => {
+    const data = getData();
+    const index = data.expenseTypes.findIndex(e => e.id === id);
+    if (index > -1) {
+        data.expenseTypes[index].linkedBuyerId = buyerId || null;
+        
+        const item = data.expenseTypes[index];
+        const supabaseItem = {
+            id: item.id,
+            name: item.name,
+            category: item.category,
+            nature: item.nature,
+            unit: item.unit,
+            baseprice: item.basePrice,
+            sort_order: item.order,
+            linked_buyer_id: item.linkedBuyerId
+        };
+        saveData(data, 'expense_types', supabaseItem);
+    }
+};
+
+// Mobile Sidebar Toggle
+document.addEventListener('DOMContentLoaded', () => {
+    const btnToggle = document.getElementById('btn-toggle-sidebar');
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    const navLinks = document.querySelectorAll('.nav-link');
+
+    if (btnToggle && sidebar && overlay) {
+        const toggleSidebar = () => {
+            sidebar.classList.toggle('active');
+            overlay.classList.toggle('active');
+        };
+
+        btnToggle.addEventListener('click', toggleSidebar);
+        overlay.addEventListener('click', toggleSidebar);
+
+        // Close sidebar when link is clicked on mobile
+        navLinks.forEach(link => {
+            link.addEventListener('click', () => {
+                if (window.innerWidth <= 768) {
+                    toggleSidebar();
+                }
+            });
+        });
+    }
+});

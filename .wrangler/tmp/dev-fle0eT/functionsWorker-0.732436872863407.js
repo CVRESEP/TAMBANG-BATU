@@ -31,42 +31,6 @@ var __toESM = /* @__PURE__ */ __name((mod, isNodeMode, target) => (target = mod 
   isNodeMode || !mod || !mod.__esModule ? __defProp2(target, "default", { value: mod, enumerable: true }) : target,
   mod
 )), "__toESM");
-async function onRequestPost(context) {
-  const { request } = context;
-  try {
-    const body = await request.json();
-    const { username, password } = body;
-    if (username === "ADMIN" && password === "ADMIN") {
-      return new Response(JSON.stringify({
-        success: true,
-        user: {
-          username: "ADMIN",
-          id: "admin-id",
-          profile: {
-            full_name: "Administrator",
-            role: "Admin"
-          }
-        }
-      }), {
-        headers: { "Content-Type": "application/json" },
-        status: 200
-      });
-    }
-    return new Response(JSON.stringify({ error: "Username atau Password salah." }), {
-      headers: { "Content-Type": "application/json" },
-      status: 401
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: "Invalid request" }), { status: 400 });
-  }
-}
-__name(onRequestPost, "onRequestPost");
-var init_auth = __esm({
-  "api/auth.js"() {
-    init_functionsRoutes_0_7074094902891876();
-    __name2(onRequestPost, "onRequestPost");
-  }
-});
 var LibsqlError;
 var LibsqlBatchError;
 var init_api = __esm({
@@ -5746,6 +5710,58 @@ var init_web2 = __esm({
     __name2(_createClient3, "_createClient");
   }
 });
+async function onRequestPost(context) {
+  const { env, request } = context;
+  try {
+    const body = await request.json();
+    const { username, password } = body;
+    if (username === "ADMIN" && password === "ADMIN") {
+      return new Response(JSON.stringify({
+        success: true,
+        user: { username: "ADMIN", id: "admin-id", profile: { full_name: "Administrator", role: "Admin" } }
+      }), { headers: { "Content-Type": "application/json" }, status: 200 });
+    }
+    const client = createClient({
+      url: env.TURSO_URL,
+      authToken: env.TURSO_AUTH_TOKEN
+    });
+    const result = await client.execute({
+      sql: "SELECT * FROM profiles WHERE email = ? AND password = ?",
+      args: [username, password]
+    });
+    if (result.rows.length > 0) {
+      const user = result.rows[0];
+      return new Response(JSON.stringify({
+        success: true,
+        user: {
+          username: user.email,
+          id: user.id,
+          profile: {
+            full_name: user.full_name,
+            role: user.role
+          }
+        }
+      }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    }
+    return new Response(JSON.stringify({ error: "Username atau Password salah." }), {
+      headers: { "Content-Type": "application/json" },
+      status: 401
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: "Terjadi kesalahan server: " + e.message }), { status: 500 });
+  }
+}
+__name(onRequestPost, "onRequestPost");
+var init_auth = __esm({
+  "api/auth.js"() {
+    init_functionsRoutes_0_7074094902891876();
+    init_web2();
+    __name2(onRequestPost, "onRequestPost");
+  }
+});
 async function onRequestGet(context) {
   const { env } = context;
   const client = createClient({
@@ -5753,13 +5769,31 @@ async function onRequestGet(context) {
     authToken: env.TURSO_AUTH_TOKEN
   });
   try {
-    const [buyers, drivers, expenseTypes, settlements, deductions, transactions] = await Promise.all([
+    await client.execute(`
+            CREATE TABLE IF NOT EXISTS profiles (
+                id TEXT PRIMARY KEY,
+                full_name TEXT,
+                email TEXT UNIQUE,
+                role TEXT,
+                created_at TEXT
+            )
+        `);
+    try {
+      await client.execute(`ALTER TABLE profiles ADD COLUMN password TEXT`);
+    } catch (e) {
+    }
+  } catch (e) {
+    console.error("Migration failed:", e);
+  }
+  try {
+    const [buyers, drivers, expenseTypes, settlements, deductions, transactions, profiles] = await Promise.all([
       client.execute("SELECT * FROM buyers"),
       client.execute("SELECT * FROM drivers"),
       client.execute("SELECT * FROM expense_types"),
       client.execute("SELECT * FROM settlements"),
       client.execute("SELECT * FROM deductions"),
-      client.execute("SELECT * FROM transactions")
+      client.execute("SELECT * FROM transactions"),
+      client.execute("SELECT * FROM profiles")
     ]);
     return new Response(JSON.stringify({
       buyers: buyers.rows,
@@ -5767,7 +5801,8 @@ async function onRequestGet(context) {
       expenseTypes: expenseTypes.rows,
       settlements: settlements.rows,
       deductions: deductions.rows,
-      transactions: transactions.rows
+      transactions: transactions.rows,
+      profiles: profiles.rows
     }), {
       headers: { "Content-Type": "application/json" },
       status: 200

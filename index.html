@@ -75,6 +75,7 @@
     </div>
 
     <div class="app-container" id="main-app" style="display: none;">
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -114,7 +115,7 @@
                     <span class="material-symbols-outlined">bar_chart</span>
                     Laporan Mingguan
                 </a>
-                <a href="#" class="nav-link" data-target="users" id="nav-users" style="display: none;">
+                <a href="#" class="nav-link" data-target="users" id="nav-users">
                     <span class="material-symbols-outlined">manage_accounts</span>
                     Manajemen Akun
                 </a>
@@ -130,7 +131,12 @@
         <!-- Main Content -->
         <main class="main-content">
             <header class="top-header">
-                <h1 id="page-title">Dashboard</h1>
+                <div class="header-left d-flex align-center" style="gap: 1rem;">
+                    <button class="btn-icon mobile-only" id="btn-toggle-sidebar" style="display: none;">
+                        <span class="material-symbols-outlined">menu</span>
+                    </button>
+                    <h1 id="page-title">Dashboard</h1>
+                </div>
                 <div class="header-right">
                     <span class="date-display" id="current-date"></span>
                     <div class="user-profile">
@@ -236,6 +242,20 @@
                             </div>
                         </div>
                         <div class="card-body">
+                            <div class="d-flex" style="gap:1rem; margin-bottom: 1rem; align-items:center; background: #f8fafc; padding: 0.75rem; border-radius: 0.5rem; border: 1px solid #e2e8f0; justify-content: space-between;">
+                                <div class="d-flex" style="gap:1rem; align-items:center;">
+                                    <div style="font-weight: 600; font-size: 0.85rem; color: #475569;"><span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle;">calendar_month</span> Filter Minggu:</div>
+                                    <div class="d-flex" style="gap:0.25rem; align-items:center;">
+                                        <button class="btn-icon" id="btn-prev-week" style="padding: 0.25rem; background: white; border: 1px solid #cbd5e1; border-radius: 0.25rem; display:flex; align-items:center; cursor:pointer;" onclick="shiftWeek(-1)" title="Minggu Sebelumnya">
+                                            <span class="material-symbols-outlined" style="font-size: 18px;">chevron_left</span>
+                                        </button>
+                                        <select id="penjualan-week-filter" class="form-control" style="width: auto; max-width: 300px; padding: 0.25rem 0.5rem; margin: 0;" onchange="render_penjualan()"></select>
+                                        <button class="btn-icon" id="btn-next-week" style="padding: 0.25rem; background: white; border: 1px solid #cbd5e1; border-radius: 0.25rem; display:flex; align-items:center; cursor:pointer;" onclick="shiftWeek(1)" title="Minggu Selanjutnya">
+                                            <span class="material-symbols-outlined" style="font-size: 18px;">chevron_right</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="table-responsive">
                                 <table class="table" id="table-penjualan-list">
                                     <thead>
@@ -364,11 +384,13 @@
                                     <thead>
                                         <tr>
                                             <th style="width: 40px;"><input type="checkbox" id="check-all-pengeluaran"></th>
+                                            <th style="width: 40px;">No</th>
                                             <th>Nama Pengeluaran</th>
                                             <th>Kategori</th>
                                             <th>Jenis (Sifat)</th>
                                             <th>Satuan</th>
                                             <th>Harga Satuan</th>
+                                            <th>Koneksi Pembeli</th>
                                             <th>Aksi</th>
                                         </tr>
                                     </thead>
@@ -403,16 +425,7 @@
                                     <option value="">Semua</option>
                                 </select>
                             </div>
-                            <div class="form-group" style="margin:0; display:flex; align-items:center; gap:0.5rem">
-                                <label style="font-size:0.8rem; margin:0; white-space:nowrap">Dari:</label>
-                                <input type="date" id="filter-potongan-start" class="form-control"
-                                    style="padding: 0.25rem 0.5rem; width:130px">
-                            </div>
-                            <div class="form-group" style="margin:0; display:flex; align-items:center; gap:0.5rem">
-                                <label style="font-size:0.8rem; margin:0; white-space:nowrap">Sampai:</label>
-                                <input type="date" id="filter-potongan-end" class="form-control"
-                                    style="padding: 0.25rem 0.5rem; width:130px">
-                            </div>
+                            
                             <div class="d-flex" style="gap:0.5rem">
                                 <button class="btn btn-danger" id="btn-bulk-delete-setoran" style="display:none">
                                     <span class="material-symbols-outlined">delete_sweep</span> Hapus
@@ -443,6 +456,16 @@
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Potongan</h2>
                             <div class="d-flex" style="gap: 1rem; align-items: center;">
+                            <div class="form-group" style="margin:0; display:flex; align-items:center; gap:0.5rem">
+                                <label style="font-size:0.8rem; margin:0; white-space:nowrap">Dari:</label>
+                                <input type="date" id="filter-potongan-start" class="form-control"
+                                    style="padding: 0.25rem 0.5rem; width:130px" onchange="render_potongan()">
+                            </div>
+                            <div class="form-group" style="margin:0; display:flex; align-items:center; gap:0.5rem">
+                                <label style="font-size:0.8rem; margin:0; white-space:nowrap">Sampai:</label>
+                                <input type="date" id="filter-potongan-end" class="form-control"
+                                    style="padding: 0.25rem 0.5rem; width:130px" onchange="render_potongan()">
+                            </div>
                                 <button class="btn btn-primary" id="btn-add-setoran-2"
                                     style="background:var(--secondary-color)">
                                     <span class="material-symbols-outlined">add</span> Tambah Setoran
@@ -563,6 +586,8 @@
                             <p>Loading laporan...</p>
                         </div>
                     </div>
+                </section>
+
                 <!-- User Management Page -->
                 <section id="users" class="page">
                     <div class="card">

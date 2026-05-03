@@ -682,3 +682,140 @@ select.form-control {
 .badge-admin { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
 .badge-manager { background: rgba(79, 70, 229, 0.1); color: #4f46e5; }
 .badge-staff { background: rgba(100, 116, 139, 0.1); color: #64748b; }
+/* ==========================================
+   MOBILE RESPONSIVE STYLES
+   ========================================== */
+
+.mobile-only {
+    display: none !important;
+}
+
+@media (max-width: 768px) {
+    .mobile-only {
+        display: flex !important;
+    }
+
+    /* Sidebar Mobile */
+    .sidebar {
+        position: fixed;
+        left: -280px;
+        top: 0;
+        bottom: 0;
+        z-index: 1000;
+        width: 280px;
+        box-shadow: 10px 0 30px rgba(0,0,0,0.2);
+    }
+
+    .sidebar.active {
+        left: 0;
+    }
+
+    /* Sidebar Overlay */
+    .sidebar-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.5);
+        backdrop-filter: blur(2px);
+        z-index: 999;
+        display: none;
+    }
+
+    .sidebar-overlay.active {
+        display: block;
+    }
+
+    /* Layout Adjustments */
+    .top-header {
+        padding: 0 1rem;
+    }
+
+    .page-container {
+        padding: 1rem;
+    }
+
+    .header-right .date-display {
+        display: none;
+    }
+
+    /* Cards & Grids */
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .stat-card {
+        padding: 1rem;
+    }
+
+    .card-header {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 1rem;
+    }
+
+    .card-header .d-flex {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .card-header .btn {
+        width: 100%;
+    }
+
+    /* Form Actions */
+    .form-actions {
+        flex-direction: column;
+    }
+
+    .form-actions .btn {
+        width: 100%;
+    }
+
+    /* Modal */
+    .modal {
+        width: 95%;
+        max-width: none;
+        bottom: 0;
+        top: auto;
+        transform: translate(-50%, 100%);
+        border-radius: 1.5rem 1.5rem 0 0;
+    }
+
+    .modal.active {
+        transform: translate(-50%, 0);
+    }
+
+    /* Table Font */
+    .table th, .table td {
+        padding: 0.75rem 0.5rem;
+        font-size: 0.75rem;
+    }
+}
+
+/* Specific UI Adjustments for Mobile */
+@media (max-width: 768px) {
+    /* Penjualan Filters */
+    .card-body .d-flex {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.75rem !important;
+    }
+
+    .card-body .d-flex div {
+        justify-content: space-between;
+    }
+
+    #weekly-pagination-select {
+        flex: 1;
+        width: auto !important;
+    }
+
+    /* Modal padding */
+    .modal-body {
+        padding: 1rem;
+    }
+
+    /* Input focus Zoom prevention */
+    input, select, textarea {
+        font-size: 16px !important; /* Prevents auto-zoom on iOS */
+    }
+}

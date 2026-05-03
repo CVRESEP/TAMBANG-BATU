@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/agemanstore27-prog/TAMBANG-BATU#readme",
   "dependencies": {
-    "@libsql/client": "^0.17.3"
+    "@libsql/client": "^0.17.3",
+    "dotenv": "^17.4.2"
   }
 }
