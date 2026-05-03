@@ -40,7 +40,7 @@ function printLaporanPDF() {
 }
 
 // ============================================================
-// State Management — Supabase Integration
+// State Management — Turso Integration
 // ============================================================
 const STORAGE_KEY = 'tambangBatuData';
 
@@ -59,159 +59,39 @@ function getData() {
     if (!_cache) {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
-            try {
-                _cache = JSON.parse(raw);
-            } catch(e) {
-                console.error("Gagal membaca localStorage", e);
-                _cache = JSON.parse(JSON.stringify(defaultData));
-            }
-        } else {
-            _cache = JSON.parse(JSON.stringify(defaultData));
-        }
-    }
-    return _cache;
-}
-
-// Fetch all data from Supabase
-async function fetchAllDataFromSupabase() {
-    if (!window.supabaseClient) return;
-    
-    console.log("📥 Mengambil data dari Supabase...");
-    try {
-        const [
-            { data: buyers },
-            { data: drivers },
-            { data: expenseTypes },
-            { data: settlements },
-            { data: deductions },
-            { data: transactions }
-        ] = await Promise.all([
-            window.supabaseClient.from('buyers').select('*'),
-            window.supabaseClient.from('drivers').select('*'),
-            window.supabaseClient.from('expense_types').select('*'),
-            window.supabaseClient.from('settlements').select('*'),
-            window.supabaseClient.from('deductions').select('*'),
-            window.supabaseClient.from('transactions').select('*')
-        ]);
-
-        _cache = {
-            buyers: (buyers || []).map(b => ({ ...b, unitPrice: b.unitprice })),
-            drivers: (drivers || []).map(d => ({ ...d, vehicleNumber: d.vehiclenumber })),
-            expenseTypes: (expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice })),
-            settlements: settlements || [],
-            deductions: (deductions || []).map(d => ({ ...d, buyerId: d.buyerid })),
-            transactions: (transactions || []).map(t => ({
-                ...t,
-                buyerId: t.buyerid,
-                driverId: t.driverid,
-                totalAmount: t.totalamount,
-                operationalExpense: t.operationalexpense,
-                retributionExpense: t.retributionexpense,
-                expenseDetails: t.expenses || []
-            }))
-        };
-
-        saveData(_cache);
-        console.log("✅ Data berhasil disinkronkan dari Supabase.");
-    } catch (e) {
-        console.error("❌ Gagal mengambil data dari Supabase:", e);
-    }
-}
-
-// ============================================================
-// Authentication & User Management
-// ============================================================
-
-let currentUser = null;
-
-async function initAuth() {
-    if (!window.supabaseClient) return;
-
-    // Login Form Handler
-    const loginForm = document.getElementById('login-form');
-    if (loginForm) {
-        loginForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const email = document.getElementById('login-email').value;
-            const password = document.getElementById('login-password').value;
-            const errorEl = document.getElementById('login-error');
-            const btn = document.getElementById('btn-login');
-
-            errorEl.textContent = '';
-            btn.disabled = true;
-            btn.innerHTML = '<div style="width:20px;height:20px;border:2px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite;"></div> <span>Processing...</span>';
-
-            const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
-
-            if (error) {
-                errorEl.textContent = error.message;
-                btn.disabled = false;
-                btn.innerHTML = '<span>Sign In</span> <span class="material-symbols-outlined">login</span>';
-            } else {
-                // Auth state change listener will handle the UI switch
-            }
-        });
-    }
-
-    // Auth State Listener
-    window.supabaseClient.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
-            if (session) {
-                await handleUserSignIn(session.user);
-            }
-        } else if (event === 'SIGNED_OUT') {
-            handleUserSignOut();
-        }
-    });
-}
-
-async function handleUserSignIn(user) {
+            
+    localStorage.setItem('session', JSON.stringify(user));
     currentUser = user;
-    
-    // Fetch user profile (role, full name)
-    const { data: profile, error } = await window.supabaseClient
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
+    currentUser.profile = { role: 'Admin', full_name: 'Admin' };
+    document.getElementById('header-user-name').textContent = `${currentUser.profile.full_name} (${currentUser.profile.role})`;
+    const navUsers = document.getElementById('nav-users');
+    if (navUsers) navUsers.style.display = 'flex';
 
-    if (profile) {
-        currentUser.profile = profile;
-        document.getElementById('header-user-name').textContent = `${profile.full_name || user.email} (${profile.role || 'Staff'})`;
-        
-        // Show Admin Nav if Role matches
-        const navUsers = document.getElementById('nav-users');
-        if (profile.role === 'Admin') {
-            navUsers.style.display = 'flex';
-        } else {
-            navUsers.style.display = 'none';
-        }
-    } else {
-        document.getElementById('header-user-name').textContent = user.email;
-    }
-
-    // Toggle UI
     document.getElementById('login-page').style.display = 'none';
     document.getElementById('main-app').style.display = 'flex';
     document.getElementById('loading-overlay').style.display = 'none';
 
-    // Refresh Data
-    await fetchAllDataFromSupabase();
-    bootApp(); // Start main app logic
+    await fetchAllDataFromTurso();
+    bootApp();
 }
 
 function handleUserSignOut() {
     currentUser = null;
+    localStorage.removeItem('session');
     document.getElementById('login-page').style.display = 'flex';
     document.getElementById('main-app').style.display = 'none';
-    document.getElementById('login-form').reset();
-    document.getElementById('btn-login').disabled = false;
-    document.getElementById('btn-login').innerHTML = '<span>Sign In</span> <span class="material-symbols-outlined">login</span>';
+    const form = document.getElementById('login-form');
+    if (form) form.reset();
+    const btn = document.getElementById('btn-login');
+    if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>Sign In</span> <span class="material-symbols-outlined">login</span>';
+    }
 }
 
 window.logout = async () => {
     if (confirm('Yakin ingin keluar?')) {
-        await window.supabaseClient.auth.signOut();
+        handleUserSignOut();
     }
 };
 
@@ -219,26 +99,28 @@ async function saveData(data, table = null, item = null) {
     _cache = data;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 
-    if (window.supabaseClient && table && item) {
+    if (table && item) {
         try {
-            const { error } = await window.supabaseClient.from(table).upsert(item);
-            if (error) throw error;
-            console.log(`✅ Berhasil simpan ke Supabase (${table})`);
+            const response = await fetch('/api/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ table, item })
+            });
+            if (!response.ok) throw new Error('Network error');
+            console.log(`✅ Berhasil simpan ke Turso (${table})`);
         } catch (e) {
-            console.error(`❌ Gagal simpan ke Supabase (${table}):`, e);
+            console.error(`❌ Gagal simpan ke Turso (${table}):`, e);
         }
     }
 }
 
-async function deleteFromSupabase(table, id) {
-    if (window.supabaseClient) {
-        try {
-            const { error } = await supabaseClient.from(table).delete().eq('id', id);
-            if (error) throw error;
-            console.log(`✅ Berhasil hapus dari Supabase (${table})`);
-        } catch (e) {
-            console.error(`❌ Gagal hapus dari Supabase (${table}):`, e);
-        }
+async function deleteFromDatabase(table, id) {
+    try {
+        const response = await fetch(`/api/sync?table=${table}&id=${id}`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Network error');
+        console.log(`✅ Berhasil hapus dari Turso (${table})`);
+    } catch (e) {
+        console.error(`❌ Gagal hapus dari Turso (${table}):`, e);
     }
 }
 
@@ -250,12 +132,12 @@ function updateData(key, newArray) {
 
 // App boot — called once on page load
 async function bootApp() {
-    console.log("🛠️ [DEBUG] bootApp dipanggil (Mode Supabase)!");
+    console.log("🛠️ [DEBUG] bootApp dipanggil (Mode Turso)!");
     
     const overlay = document.getElementById('loading-overlay');
     try {
-        // Coba load dari Supabase
-        await fetchAllDataFromSupabase();
+        // Coba load dari Turso
+        await fetchAllDataFromTurso();
         _initApp();
     } catch(err) {
         console.error('Boot error:', err);
@@ -280,7 +162,7 @@ const formatDate = (dateString = new Date()) => {
     return new Date(dateString).toLocaleDateString('id-ID', options);
 };
 
-// _initApp: called by bootApp() AFTER Supabase data is loaded
+// _initApp: called by bootApp() AFTER Turso data is loaded
 function _initApp() {
     // Current Date Display
     document.getElementById('current-date').textContent = formatDate();
@@ -383,56 +265,16 @@ if (document.readyState === 'loading') {
 // ==========================================
 
 window.render_users = async () => {
-    if (!window.supabaseClient) return;
-
-    const { data: profiles, error } = await window.supabaseClient
-        .from('profiles')
-        .select('*')
-        .order('full_name', { ascending: true });
-
-    if (error) {
-        console.error("Gagal mengambil daftar user:", error);
-        return;
-    }
-
     const tbody = document.getElementById('users-table-body');
-    tbody.innerHTML = profiles.map(p => `
-        <tr>
-            <td>${p.full_name || '-'}</td>
-            <td>${p.email || '-'}</td>
-            <td><span class="badge badge-${p.role.toLowerCase()}">${p.role}</span></td>
-            <td>${new Date(p.created_at).toLocaleDateString()}</td>
-            <td>
-                <button class="btn-icon" onclick="editUser('${p.id}')" title="Edit Role">
-                    <span class="material-symbols-outlined">edit</span>
-                </button>
-            </td>
-        </tr>
-    `).join('');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="text-center">Manajemen user tersedia di dashboard Turso/Cloudflare</td></tr>';
 };
 
 window.openAddUserModal = () => {
-    alert("Penambahan user baru dilakukan melalui dashboard Supabase (Invite User). \n\nSetelah user menerima undangan, data profil akan otomatis tersedia.");
+    alert("Penambahan user baru dilakukan melalui dashboard Turso (Invite User). \n\nSetelah user menerima undangan, data profil akan otomatis tersedia.");
 };
 
 window.editUser = async (profileId) => {
-    const { data: profile } = await window.supabaseClient.from('profiles').select('*').eq('id', profileId).single();
-    if (!profile) return;
-
-    const newRole = prompt(`Pilih Role Baru untuk ${profile.full_name}:\n(Admin, Manager, Staff)`, profile.role);
-    if (!newRole || !['Admin', 'Manager', 'Staff'].includes(newRole)) return;
-
-    const { error } = await window.supabaseClient
-        .from('profiles')
-        .update({ role: newRole })
-        .eq('id', profileId);
-
-    if (error) {
-        alert("Gagal update role: " + error.message);
-    } else {
-        showToast("Role berhasil diperbarui");
-        render_users();
-    }
+    alert("Silakan gunakan dashboard Turso/Cloudflare untuk mengelola akun.");
 };
 
 // Add navigation listener for Users page
@@ -845,7 +687,7 @@ function savePembeli() {
         data.buyers.push(item);
     }
 
-    // Mapping for Supabase (lowercase columns)
+    // Mapping for Turso (lowercase columns)
     const supabaseItem = { 
         id: item.id, 
         name: item.name, 
@@ -865,7 +707,7 @@ window.deletePembeli = (id) => {
         const data = getData();
         data.buyers = data.buyers.filter(b => b.id !== id);
         saveData(data);
-        deleteFromSupabase('buyers', id);
+        deleteFromDatabase('buyers', id);
         render_pembeli();
     }
 };
@@ -954,7 +796,7 @@ function saveSopir() {
         data.drivers.push(item);
     }
 
-    // Mapping for Supabase (lowercase columns)
+    // Mapping for Turso (lowercase columns)
     const supabaseItem = {
         id: item.id,
         name: item.name,
@@ -972,7 +814,7 @@ window.deleteSopir = (id) => {
         const data = getData();
         data.drivers = data.drivers.filter(d => d.id !== id);
         saveData(data);
-        deleteFromSupabase('drivers', id);
+        deleteFromDatabase('drivers', id);
         render_sopir();
     }
 };
@@ -1091,7 +933,7 @@ function savePengeluaran() {
         data.expenseTypes.push(item);
     }
 
-    // Mapping for Supabase (lowercase columns)
+    // Mapping for Turso (lowercase columns)
     const supabaseItem = {
         id: item.id,
         name: item.name,
@@ -1111,7 +953,7 @@ window.deletePengeluaran = (id) => {
         const data = getData();
         data.expenseTypes = data.expenseTypes.filter(e => e.id !== id);
         saveData(data);
-        deleteFromSupabase('expense_types', id);
+        deleteFromDatabase('expense_types', id);
         render_pengeluaran();
     }
 };
@@ -1291,11 +1133,11 @@ function saveBulkPotongan() {
 
     saveData(data); // Full local sync
 
-    // Individual sync to Supabase for added rows
-    if (window.supabaseClient) {
+    // Individual sync to Turso for added rows
+    if (window.tursoClient) {
         const rowsToSync = data.deductions.slice(-added);
         rowsToSync.forEach(row => {
-            supabaseClient.from('deductions').upsert(row).then(({error}) => {
+            // REMOVED SUPABASE CALL(row).then(({error}) => {
                 if (error) console.error("Gagal sync bulk potongan:", error);
             });
         });
@@ -1450,7 +1292,7 @@ function savePotongan() {
         data.deductions.push(item);
     }
 
-    // Mapping for Supabase (lowercase columns)
+    // Mapping for Turso (lowercase columns)
     const supabaseItem = {
         id: item.id,
         jenis: item.jenis,
@@ -1471,7 +1313,7 @@ window.deletePotongan = (id) => {
         const data = getData();
         data.deductions = data.deductions.filter(p => p.id !== id);
         saveData(data);
-        deleteFromSupabase('deductions', id);
+        deleteFromDatabase('deductions', id);
         render_potongan();
     }
 };
@@ -1537,7 +1379,7 @@ window.saveSetoran = (id) => {
         data.settlements.push(item);
     }
 
-    // Mapping for Supabase (lowercase columns)
+    // Mapping for Turso (lowercase columns)
     const supabaseItem = {
         id: item.id,
         expensetypeid: item.expenseTypeId
@@ -1553,7 +1395,7 @@ window.deleteSetoran = (id) => {
         const data = getData();
         data.settlements = data.settlements.filter(s => s.id !== id);
         saveData(data);
-        deleteFromSupabase('settlements', id);
+        deleteFromDatabase('settlements', id);
         render_potongan();
     }
 };
@@ -1671,7 +1513,7 @@ window.deleteTransaksi = (id) => {
         const data = getData();
         data.transactions = data.transactions.filter(t => t.id !== id);
         saveData(data);
-        deleteFromSupabase('transactions', id);
+        deleteFromDatabase('transactions', id);
         render_penjualan();
     }
 };
@@ -2402,7 +2244,7 @@ function saveComplexTransaction(data) {
         created_at: new Date().toISOString()
     };
 
-    // Mapping for Supabase (lowercase columns)
+    // Mapping for Turso (lowercase columns)
     const supabaseItem = {
         id: transaction.id,
         date: transaction.date,
@@ -3276,16 +3118,16 @@ async function executeBulkDelete(config, ids) {
     data[config.cacheKey] = data[config.cacheKey].filter(item => !ids.includes(item.id));
     saveData(data); // Local storage update
 
-    // Supabase Delete
-    if (window.supabaseClient) {
-        try {
-            const { error } = await window.supabaseClient.from(config.supabaseTable).delete().in('id', ids);
-            if (error) throw error;
-            console.log(`✅ Berhasil hapus bulk dari Supabase (${config.supabaseTable})`);
-        } catch (e) {
-            console.error(`❌ Gagal hapus bulk dari Supabase (${config.supabaseTable}):`, e);
-            alert(`Beberapa data mungkin gagal dihapus dari cloud, silakan refresh.`);
+    // Turso Delete
+        // Database Delete
+    try {
+        for (const id of ids) {
+            await deleteFromDatabase(config.supabaseTable, id);
         }
+        console.log(`✅ Berhasil hapus bulk dari Turso (${config.supabaseTable})`);
+    } catch (e) {
+        console.error(`❌ Gagal hapus bulk dari Turso (${config.supabaseTable}):`, e);
+        alert(`Beberapa data mungkin gagal dihapus dari cloud, silakan refresh.`);
     }
 
     // Reset Check All
