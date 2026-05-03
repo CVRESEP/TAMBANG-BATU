@@ -869,3 +869,47 @@ select.form-control {
         font-size: 16px !important; /* Prevents auto-zoom on iOS */
     }
 }
+
+/* Responsive Form Rows */
+.row-item {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px dashed #e2e8f0;
+}
+
+@media (max-width: 768px) {
+    .row-item {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.5rem;
+        background: #f8fafc;
+        padding: 1rem;
+        border-radius: 0.75rem;
+        border: 1px solid #e2e8f0;
+    }
+
+    .row-item > div {
+        flex: none !important;
+        width: 100% !important;
+    }
+
+    .row-item-header {
+        display: none !important; /* Hide the table-like headers */
+    }
+
+    /* Add labels inside inputs for mobile */
+    .mobile-label {
+        display: block;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #64748b;
+        margin-bottom: 0.25rem;
+    }
+}
+
+.mobile-label {
+    display: none;
+}
