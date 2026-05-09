@@ -1235,7 +1235,6 @@ function savePengeluaran() {
     const unit = document.getElementById('pengeluaran-unit').value.toUpperCase();
     const basePrice = parseFloat(document.getElementById('pengeluaran-price').value) || 0;
     const order = parseInt(document.getElementById('pengeluaran-order').value) || 0;
-    const linkedBuyerId = item?.linkedBuyerId || null;
 
     const data = getData();
     let item;
