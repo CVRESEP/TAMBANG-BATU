@@ -2708,13 +2708,13 @@ function saveComplexTransaction(data) {
     let totalOps = 0;
     const opsDetails = opsExpenseRows.filter(r => r.qty > 0 && (r.expenseId || r.name)).map(r => {
         totalOps += r.total;
-        return { expenseId: r.expenseId, name: r.name, qty: r.qty, amount: r.total };
+        return { expenseId: r.expenseId, name: r.name, qty: r.qty, amount: r.total, category: 'Operasional' };
     });
 
     let totalRet = 0;
     const retDetails = retExpenseRows.filter(r => r.qty > 0 && (r.expenseId || r.name)).map(r => {
         totalRet += r.total;
-        return { expenseId: r.expenseId, name: r.name, qty: r.qty, amount: r.total };
+        return { expenseId: r.expenseId, name: r.name, qty: r.qty, amount: r.total, category: 'Retribusi' };
     });
 
     const totalAmount = validSales.reduce((acc, row) => acc + row.total, 0);
@@ -2922,11 +2922,22 @@ window.exportPenjualanExcel = () => {
     const expRows = [];
     data.transactions.forEach(tx => {
         (tx.expenseDetails || []).forEach(d => {
-            const expType = data.expenseTypes.find(e => e.id === d.expenseId);
+            let category = d.category;
+            let name = d.name;
+            if (!category && d.expenseId) {
+                const expType = data.expenseTypes.find(e => e.id === d.expenseId);
+                if (expType) {
+                    category = expType.category;
+                    name = expType.name;
+                }
+            } else if (!category) {
+                category = 'Operasional'; // Fallback for old manual expenses
+            }
+
             expRows.push([
                 tx.date,
-                expType ? expType.name : '',
-                expType ? (expType.category || '') : '',
+                name || 'Manual',
+                category || 'Operasional',
                 d.qty,
                 d.amount
             ]);
@@ -3181,16 +3192,28 @@ window.render_laporan = () => {
             });
         });
 
-        // 2. Ops Expenses - look up name and category from expenseTypes
+        // 2. Ops Expenses - look up name and category
         const opsGroups = [];
         filtered.forEach(tx => {
             (tx.expenseDetails || []).forEach(d => {
-                const expType = data.expenseTypes.find(e => e.id === d.expenseId);
-                if (!expType || expType.category !== 'Operasional') return;
+                let category = d.category;
+                let name = d.name;
+                if (!category && d.expenseId) {
+                    const expType = data.expenseTypes.find(e => e.id === d.expenseId);
+                    if (expType) {
+                        category = expType.category;
+                        name = expType.name;
+                    }
+                } else if (!category) {
+                    category = 'Operasional'; // Fallback for old manual expenses
+                }
+
+                if (category !== 'Operasional') return;
+
                 const price = d.qty > 0 ? d.amount / d.qty : 0;
-                let group = opsGroups.find(g => g.name === expType.name && Math.abs(g.price - price) < 1);
+                let group = opsGroups.find(g => g.name === name && Math.abs(g.price - price) < 1);
                 if (!group) {
-                    group = { name: expType.name, price: price, qty: 0, total: 0 };
+                    group = { name: name || 'Manual', price: price, qty: 0, total: 0 };
                     opsGroups.push(group);
                 }
                 group.qty += d.qty;
@@ -3198,16 +3221,26 @@ window.render_laporan = () => {
             });
         });
 
-        // 3. Retri Expenses - look up name and category from expenseTypes
+        // 3. Retri Expenses - look up name and category
         const retGroups = [];
         filtered.forEach(tx => {
             (tx.expenseDetails || []).forEach(d => {
-                const expType = data.expenseTypes.find(e => e.id === d.expenseId);
-                if (!expType || expType.category !== 'Retribusi') return;
+                let category = d.category;
+                let name = d.name;
+                if (!category && d.expenseId) {
+                    const expType = data.expenseTypes.find(e => e.id === d.expenseId);
+                    if (expType) {
+                        category = expType.category;
+                        name = expType.name;
+                    }
+                }
+
+                if (category !== 'Retribusi') return;
+
                 const price = d.qty > 0 ? d.amount / d.qty : 0;
-                let group = retGroups.find(g => g.name === expType.name && Math.abs(g.price - price) < 1);
+                let group = retGroups.find(g => g.name === name && Math.abs(g.price - price) < 1);
                 if (!group) {
-                    group = { name: expType.name, price: price, qty: 0, total: 0 };
+                    group = { name: name || 'Manual', price: price, qty: 0, total: 0 };
                     retGroups.push(group);
                 }
                 group.qty += d.qty;
