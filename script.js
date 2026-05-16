@@ -2119,13 +2119,13 @@ function initSalesForm(container, data, txToEdit = null) {
     };
 
     document.getElementById('btn-add-ops-row').onclick = () => {
-        opsExpenseRows.push({ id: generateId(), expenseId: '', name: '', basePrice: 0, qty: 0, total: 0 });
+        opsExpenseRows.push({ id: generateId(), expenseId: null, name: '', basePrice: 0, qty: 1, total: 0 });
         renderOpsRows(data);
     };
 
     document.getElementById('btn-add-ret-row').onclick = () => {
         const totalRit = typeof calculateTotalRitase === 'function' ? calculateTotalRitase() : 0;
-        retExpenseRows.push({ id: generateId(), expenseId: '', name: '', basePrice: 0, qty: totalRit, total: 0 });
+        retExpenseRows.push({ id: generateId(), expenseId: '', name: '', basePrice: 0, qty: totalRit || 1, total: 0 });
         renderRetRows(data);
     };
 
@@ -2226,7 +2226,7 @@ function syncRetribusiQty() {
 function renderSalesRows(data) {
     const container = document.getElementById('penjualan-rows-container');
     let html = `
-        <div class="row-item-header d-flex" style="gap:1rem; padding-bottom:0.5rem; border-bottom:1px solid #e5e7eb; margin-bottom:0.5rem; font-size:0.75rem; font-weight:600; color:#4b5563;">
+        <div class="d-flex" style="gap:1rem; padding-bottom:0.5rem; border-bottom:1px solid #e5e7eb; margin-bottom:0.5rem; font-size:0.75rem; font-weight:600; color:#4b5563;">
             <div style="flex:2">Pembeli</div>
             <div style="flex:0.8; text-align:center">Jml Sopir</div>
             <div style="flex:1">Qty</div>
@@ -2242,50 +2242,50 @@ function renderSalesRows(data) {
         let isProyekTon = false;
         let options = '<option value="">Pilih...</option>';
         data.buyers.forEach(b => {
-            options += `<option value="${b.id}" ${b.id === row.buyerId ? 'selected' : ''}>${b.name} (${b.category || 'Umum'})${b.unit ? ' - ' + b.unit : ''}</option>`;
+            options += `<option value="${b.id}" ${b.id === row.buyerId ? 'selected' : ''}>${b.name} (${b.category || 'Umum'})</option>`;
             if (row.buyerId === b.id) {
-                if (row.unitPrice === undefined) row.unitPrice = b.unitPrice;
-                if ((b.category || '').toLowerCase() === 'proyek' && (b.unit || '').toLowerCase() === 'ton') isProyekTon = true;
+                if (row.unitPrice === undefined) {
+                    row.unitPrice = b.unitPrice; // Initialize if not set
+                }
+                if ((b.category || '').toLowerCase() === 'proyek' && (b.unit || '').toLowerCase() === 'ton') {
+                    isProyekTon = true;
+                }
             }
         });
 
-        let driverCountHtml = isProyekTon 
-            ? `<input type="number" class="form-control" style="background:#f8fafc; border-color:#cbd5e1; text-align:center" step="1" min="1" value="${row.driverCount || 1}" oninput="updateSalesRow('${row.id}', 'driverCount', this.value)">`
-            : `<input type="text" class="form-control" style="background:#e2e8f0; border-color:#cbd5e1; color:#94a3b8; text-align:center;" value="-" readonly>`;
+        let driverCountHtml = '';
+        if (isProyekTon) {
+            driverCountHtml = `<input type="number" class="form-control" style="background:#f8fafc; border-color:#cbd5e1; text-align:center" step="1" min="1" value="${row.driverCount || 1}" oninput="updateSalesRow('${row.id}', 'driverCount', this.value)">`;
+        } else {
+            driverCountHtml = `<input type="text" class="form-control" style="background:#e2e8f0; border-color:#cbd5e1; color:#94a3b8; text-align:center;" value="-" readonly title="Tidak diperlukan">`;
+        }
 
         html += `
-            <div class="row-item" data-id="${row.id}">
+            <div class="d-flex align-center" style="gap:1rem; margin-bottom:0.5rem;" data-id="${row.id}">
                 <div style="flex:2">
-                    <label class="mobile-label">Pembeli</label>
                     <select class="form-control sales-buyer" style="background:#f8fafc; border-color:#cbd5e1;" onchange="updateSalesRow('${row.id}', 'buyerId', this.value)">
                         ${options}
                     </select>
                 </div>
-                <div class="d-flex" style="gap:0.5rem; flex:1.8">
-                    <div style="flex:0.8">
-                        <label class="mobile-label">Jml Sopir</label>
-                        ${driverCountHtml}
-                    </div>
-                    <div style="flex:1">
-                        <label class="mobile-label">Quantity</label>
-                        <input type="number" class="form-control" style="background:#f8fafc; border-color:#cbd5e1;" step="0.01" min="0" value="${row.qty}" oninput="updateSalesRow('${row.id}', 'qty', this.value)">
-                    </div>
+                <div style="flex:0.8">
+                    ${driverCountHtml}
                 </div>
-                <div class="d-flex" style="gap:0.5rem; flex:3.5">
-                    <div style="flex:1.5">
-                        <label class="mobile-label">Harga Satuan</label>
-                        <input type="text" class="form-control" style="background:#f8fafc; border-color:#cbd5e1;" value="${row.unitPrice ? formatCurrency(row.unitPrice) : 'Rp 0'}" readonly>
-                    </div>
-                    <div style="flex:2">
-                        <label class="mobile-label">Total Harga</label>
-                        <input type="text" class="form-control" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca; font-weight:600;" value="${formatCurrency(row.total)}" readonly>
-                    </div>
+                <div style="flex:1">
+                    <input type="number" class="form-control" style="background:#f8fafc; border-color:#cbd5e1;" step="0.01" min="0" value="${row.qty}" oninput="updateSalesRow('${row.id}', 'qty', this.value)">
                 </div>
-                <div class="d-flex align-center" style="gap:0.5rem; width:100%; margin-top:0.25rem">
-                    <button type="button" class="btn" style="background:var(--secondary-color); color:white; padding:0.5rem; flex:1; font-size:0.85rem;" onclick="openSetoranDetail('${row.id}')">
-                        <span class="material-symbols-outlined" style="font-size:1.1rem; vertical-align:middle">payments</span> Atur Setoran
+                <div style="flex:1.5">
+                    <input type="text" class="form-control" style="background:#f8fafc; border-color:#cbd5e1;" value="${row.unitPrice ? formatCurrency(row.unitPrice) : 'Rp 0'}" readonly>
+                </div>
+                <div style="flex:1.2">
+                    <button type="button" class="btn" style="background:var(--secondary-color); color:white; padding:0.4rem; width:100%; font-size:0.75rem;" onclick="openSetoranDetail('${row.id}')">
+                        <span class="material-symbols-outlined" style="font-size:1.1rem; vertical-align:middle">payments</span> Setoran
                     </button>
-                    <button type="button" class="btn btn-danger" style="padding:0.5rem; width:40px" onclick="removeSalesRow('${row.id}')">
+                </div>
+                <div style="flex:2">
+                    <input type="text" class="form-control" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca; font-weight:600;" value="${formatCurrency(row.total)}" readonly>
+                </div>
+                <div style="width:40px">
+                    <button type="button" class="btn-icon text-danger" onclick="removeSalesRow('${row.id}')">
                         <span class="material-symbols-outlined">delete</span>
                     </button>
                 </div>
@@ -2294,9 +2294,12 @@ function renderSalesRows(data) {
     });
 
     html += `
-        <div class="d-flex align-center justify-between" style="margin-top:1rem; padding-top:1rem; border-top:2px solid #e2e8f0;">
-            <div style="font-weight:700; color:#1e293b; font-size:1rem;">Total Pembelian:</div>
-            <div style="font-weight:800; font-size:1.2rem; color:var(--primary-color);">${formatCurrency(sumTotal)}</div>
+        <div class="d-flex align-center" style="gap:1rem; margin-top:0.75rem; padding-top:0.75rem; border-top:1px dashed #cbd5e1;">
+            <div style="flex:5.3; text-align:right; font-weight:700; color:#1e293b; font-size:0.9rem;">Total Pembelian:</div>
+            <div style="flex:2">
+                <input type="text" class="form-control" style="background:transparent; border:none; color:#111827; font-weight:700; font-size:1rem;" value="${formatCurrency(sumTotal)}" readonly>
+            </div>
+            <div style="width:40px"></div>
         </div>
     `;
 
@@ -2457,44 +2460,65 @@ window.handleVerticalTab = function(e, colClass, nextColClass, prevColClass) {
 function renderOpsRows(data) {
     const container = document.getElementById('ops-rows-container');
     let html = `
-        <div class="row-item-header d-flex" style="gap:1rem; padding-bottom:0.5rem; border-bottom:1px solid #e5e7eb; margin-bottom:0.5rem; font-size:0.75rem; font-weight:600; color:#4b5563;">
+        <div class="d-flex" style="gap:1rem; padding-bottom:0.5rem; border-bottom:1px solid #e5e7eb; margin-bottom:0.5rem; font-size:0.75rem; font-weight:600; color:#4b5563;">
             <div style="flex:2">Jenis Pengeluaran</div>
             <div style="flex:1">Qty</div>
             <div style="flex:1.5">Harga Satuan</div>
-            <div style="flex:2">Total Harga</div>
-            <div style="width:40px"></div>
+            <div style="flex:2; text-align:right">Total Harga</div>
+            <div style="width:30px"></div>
         </div>
     `;
 
+    let sumTotal = 0;
     opsExpenseRows.forEach((row) => {
-        html += `
-            <div class="row-item" data-id="${row.id}">
+        sumTotal += (row.total || 0);
+        let labelHtml = '';
+        if (row.expenseId) {
+            labelHtml = `<div style="flex:2; font-size:0.75rem; font-weight:600; text-transform:uppercase; margin-top:0.5rem;">${row.name}</div>`;
+        } else {
+            let options = '';
+            [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0)).filter(e => e.category === 'Operasional').forEach(e => {
+                options += `<option value="${e.name}">`;
+            });
+            labelHtml = `
                 <div style="flex:2">
-                    <label class="mobile-label">Jenis Pengeluaran</label>
-                    <input type="text" class="form-control" style="background:#f8fafc; border-color:#cbd5e1;" value="${row.name}" oninput="updateOpsRow('${row.id}', 'name', this.value)">
+                    <input list="ops-list-${row.id}" class="form-control ops-col-name" onkeydown="handleVerticalTab(event, 'ops-col-name', 'ops-col-qty', null)" placeholder="Ketik/Pilih... (Ops)" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" value="${row.name || ''}" onchange="updateOpsRow('${row.id}', 'customName', this.value)">
+                    <datalist id="ops-list-${row.id}">
+                        ${options}
+                    </datalist>
                 </div>
-                <div class="d-flex" style="gap:0.5rem; flex:4.5">
-                    <div style="flex:1">
-                        <label class="mobile-label">Qty</label>
-                        <input type="number" class="form-control" style="background:#f8fafc; border-color:#cbd5e1;" step="0.01" min="0" value="${row.qty}" oninput="updateOpsRow('${row.id}', 'qty', this.value)">
-                    </div>
-                    <div style="flex:1.5">
-                        <label class="mobile-label">Harga</label>
-                        <input type="number" class="form-control" style="background:#f8fafc; border-color:#cbd5e1;" step="1" min="0" value="${row.basePrice}" oninput="updateOpsRow('${row.id}', 'basePrice', this.value)">
-                    </div>
-                    <div style="flex:2">
-                        <label class="mobile-label">Total</label>
-                        <input type="text" class="form-control" style="background:#f1f5f9; border-color:#cbd5e1; font-weight:600;" value="${formatCurrency(row.total)}" readonly>
-                    </div>
-                    <div style="width:40px; align-self:flex-end">
-                        <button type="button" class="btn-icon text-danger" onclick="removeOpsRow('${row.id}')">
-                            <span class="material-symbols-outlined">delete</span>
-                        </button>
-                    </div>
+            `;
+        }
+
+        html += `
+            <div class="d-flex align-center" style="gap:1rem; margin-bottom:0.75rem;" data-id="${row.id}">
+                ${labelHtml}
+                <div style="flex:1">
+                    <input type="number" class="form-control ops-col-qty" onkeydown="handleVerticalTab(event, 'ops-col-qty', 'ops-col-price', 'ops-col-name')" placeholder="Qty" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" step="0.01" min="0" value="${row.qty || ''}" oninput="updateOpsRow('${row.id}', 'qty', this.value)">
+                </div>
+                <div style="flex:1.5">
+                    <input type="text" class="form-control ops-col-price" onkeydown="handleVerticalTab(event, 'ops-col-price', null, 'ops-col-qty')" style="background:#f8fafc; border-color:#cbd5e1; font-size:0.8rem" value="${row.basePrice ? formatCurrency(row.basePrice) : 'Rp 0'}" onfocus="this.type='number'; this.value='${row.basePrice || ''}'" onblur="this.type='text'; updateOpsRow('${row.id}', 'basePrice', this.value)">
+                </div>
+                <div style="flex:2">
+                    <input type="text" class="form-control" style="background:#eef2ff; border-color:#c7d2fe; color:#4338ca; font-weight:600; text-align:right; font-size:0.8rem" value="${row.total ? formatCurrency(row.total) : 'Rp 0'}" readonly>
+                </div>
+                <div style="width:30px">
+                     <button type="button" class="btn-icon text-danger" onclick="removeOpsRow('${row.id}')"><span class="material-symbols-outlined" style="font-size:18px">close</span></button>
                 </div>
             </div>
         `;
     });
+
+    html += `
+        <div class="d-flex align-center" style="gap:1rem; margin-top:0.75rem; padding-top:0.75rem; border-top:1px dashed #cbd5e1;">
+            <div style="flex:4.5; text-align:right; font-weight:700; color:#1e293b; font-size:0.9rem;">Total Operasional:</div>
+            <div style="flex:2">
+                <input type="text" class="form-control" style="background:transparent; border:none; color:#dc2626; font-weight:700; font-size:1rem; text-align:right" value="${formatCurrency(sumTotal)}" readonly>
+            </div>
+            <div style="width:30px"></div>
+        </div>
+    `;
+
     container.innerHTML = html;
     if (window.updateNetProfitSummary) window.updateNetProfitSummary();
 }
@@ -2504,6 +2528,7 @@ window.updateOpsRow = (id, field, value) => {
     if (row) {
         let needsFullRender = (field === 'customName' || field === 'expenseId');
 
+        if (field === 'name') row.name = value;
         if (field === 'qty') row.qty = parseFloat(value) || 0;
         if (field === 'basePrice') {
             const cleanStr = value.toString().replace(/[^0-9.-]+/g, "");
