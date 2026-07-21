@@ -86,7 +86,7 @@ async function fetchAllDataFromTurso() {
             drivers: (data.drivers || []).map(d => ({ ...d, vehicleNumber: d.vehiclenumber })),
             expenseTypes: (data.expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice, order: e.sort_order, linkedBuyerId: e.linked_buyer_id })),
             settlements: (data.settlements || []).map(s => ({ ...s, expenseTypeId: s.expensetypeid })),
-            deductions: (data.deductions || []).map(d => ({ ...d, buyerId: d.buyerid, dateStart: d.date_start, dateEnd: d.date_end })),
+            deductions: (data.deductions || []).map(d => ({ ...d, buyerId: d.buyerid, dateStart: d.datestart, dateEnd: d.dateend })),
             transactions: (data.transactions || []).map(t => ({
                 ...t,
                 buyerId: t.buyerid,
@@ -1453,20 +1453,30 @@ async function saveBulkPotongan() {
 
     // Sync potongan via API
     try {
-        const data = getData();
-        const added = parseInt(document.getElementById('total-added-count')?.value || 0);
         if (added > 0) {
             const rowsToSync = data.deductions.slice(-added);
             for (const row of rowsToSync) {
+                const supabaseItem = {
+                    id: row.id,
+                    jenis: row.jenis,
+                    buyerid: row.buyerId,
+                    date: row.date || row.dateStart,
+                    datestart: row.dateStart,
+                    dateend: row.dateEnd,
+                    description: row.description,
+                    amount: row.amount
+                };
                 await fetch('/api/sync', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ table: 'deductions', item: row })
+                    body: JSON.stringify({ table: 'deductions', item: supabaseItem })
                 });
             }
+            console.log(`✅ Berhasil sinkron ${added} potongan ke Turso`);
         }
     } catch(e) {
         console.error('Gagal sinkron potongan:', e);
+        alert(`Gagal menyimpan ke database cloud: ${e.message}. Perubahan mungkin hilang saat refresh.`);
     }
 
     closeModal();
@@ -1629,6 +1639,7 @@ function savePotongan() {
         id: item.id,
         jenis: item.jenis,
         buyerid: item.buyerId,
+        date: item.date || item.dateStart || new Date().toISOString().split('T')[0],
         datestart: item.dateStart,
         dateend: item.dateEnd,
         description: item.description,
