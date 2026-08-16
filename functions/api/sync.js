@@ -9,7 +9,7 @@ export async function onRequestGet(context) {
         authToken: env.TURSO_AUTH_TOKEN,
     });
 
-    // Auto-migrate profiles table
+    // Auto-migrate profiles and solar tables
     try {
         await client.execute(`
             CREATE TABLE IF NOT EXISTS profiles (
@@ -23,24 +23,46 @@ export async function onRequestGet(context) {
         // Ensure password column exists (SQLite doesn't support ADD COLUMN IF NOT EXISTS)
         try {
             await client.execute(`ALTER TABLE profiles ADD COLUMN password TEXT`);
-        } catch (e) {
-            // Column likely already exists, ignore
-        }
+        } catch (e) {}
+        
+        await client.execute(`
+            CREATE TABLE IF NOT EXISTS solar (
+                id TEXT PRIMARY KEY,
+                type TEXT,
+                date TEXT,
+                amount REAL,
+                description TEXT,
+                created_at TEXT
+            )
+        `);
+        try {
+            await client.execute(`ALTER TABLE solar ADD COLUMN supplier TEXT`);
+        } catch (e) {}
+        try {
+            await client.execute(`ALTER TABLE expense_types ADD COLUMN linked_solar_supplier TEXT`);
+        } catch (e) {}
+        await client.execute(`
+            CREATE TABLE IF NOT EXISTS solar_suppliers (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE,
+                created_at TEXT
+            )
+        `);
     } catch (e) {
         console.error("Migration failed:", e);
     }
 
-
-
     try {
-        const [buyers, drivers, expenseTypes, settlements, deductions, transactions, profiles] = await Promise.all([
+        const [buyers, drivers, expenseTypes, settlements, deductions, transactions, profiles, solar, solarSuppliers] = await Promise.all([
             client.execute("SELECT * FROM buyers"),
             client.execute("SELECT * FROM drivers"),
             client.execute("SELECT * FROM expense_types"),
             client.execute("SELECT * FROM settlements"),
             client.execute("SELECT * FROM deductions"),
             client.execute("SELECT * FROM transactions"),
-            client.execute("SELECT * FROM profiles")
+            client.execute("SELECT * FROM profiles"),
+            client.execute("SELECT * FROM solar"),
+            client.execute("SELECT * FROM solar_suppliers")
         ]);
 
         return new Response(JSON.stringify({
@@ -51,6 +73,8 @@ export async function onRequestGet(context) {
             deductions: deductions.rows,
             transactions: transactions.rows,
             profiles: profiles.rows,
+            solar: solar.rows,
+            solarSuppliers: solarSuppliers ? solarSuppliers.rows : []
         }), {
             headers: { 'Content-Type': 'application/json' },
             status: 200

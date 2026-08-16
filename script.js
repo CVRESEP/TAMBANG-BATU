@@ -51,7 +51,9 @@ const defaultData = {
     settlements: [],
     deductions: [],
     transactions: [],
-    profiles: []
+    profiles: [],
+    solar: [],
+    solarSuppliers: []
 };
 
 let _cache = null;
@@ -84,7 +86,7 @@ async function fetchAllDataFromTurso() {
         _cache = {
             buyers: (data.buyers || []).map(b => ({ ...b, unitPrice: b.unitprice })),
             drivers: (data.drivers || []).map(d => ({ ...d, vehicleNumber: d.vehiclenumber })),
-            expenseTypes: (data.expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice, order: e.sort_order, linkedBuyerId: e.linked_buyer_id })),
+            expenseTypes: (data.expenseTypes || []).map(e => ({ ...e, basePrice: e.baseprice, order: e.sort_order, linkedBuyerId: e.linked_buyer_id, linkedSolarSupplier: e.linked_solar_supplier || e.linkedSolarSupplier || '' })),
             settlements: (data.settlements || []).map(s => ({ ...s, expenseTypeId: s.expensetypeid })),
             deductions: (data.deductions || []).map(d => ({ ...d, buyerId: d.buyerid, dateStart: d.datestart, dateEnd: d.dateend })),
             transactions: (data.transactions || []).map(t => ({
@@ -97,7 +99,9 @@ async function fetchAllDataFromTurso() {
                 expenseDetails: typeof t.expenses === 'string' ? JSON.parse(t.expenses) : (t.expenses || []),
                 sales: typeof t.sales === 'string' ? JSON.parse(t.sales) : (t.sales || [])
             })),
-            profiles: (data.profiles || []).map(p => ({ ...p, fullName: p.full_name }))
+            profiles: (data.profiles || []).map(p => ({ ...p, fullName: p.full_name })),
+            solar: data.solar || [],
+            solarSuppliers: data.solarSuppliers || []
         };
 
         // Seed default admin if totally empty
@@ -111,6 +115,17 @@ async function fetchAllDataFromTurso() {
             });
         }
 
+        // Auto-seed suppliers to database if solarSuppliers table is empty
+        const allKnown = getAllSolarSuppliers(_cache);
+        if (allKnown.length > 0 && _cache.solarSuppliers.length === 0) {
+            for (const supName of allKnown) {
+                if (supName && supName !== '-' && supName !== 'INTERNAL') {
+                    const supItem = { id: generateId(), name: supName, created_at: new Date().toISOString() };
+                    _cache.solarSuppliers.push(supItem);
+                    saveData(_cache, 'solar_suppliers', supItem);
+                }
+            }
+        }
 
         saveData(_cache);
         console.log("✅ Data berhasil disinkronkan dari Turso.");
@@ -282,6 +297,27 @@ const formatDate = (dateString = new Date()) => {
     const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     return new Date(dateString).toLocaleDateString('id-ID', options);
 };
+
+function showToast(message, type = 'success') {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:99999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    const bg = type === 'error' ? '#ef4444' : (type === 'warning' ? '#f59e0b' : '#10b981');
+    toast.style.cssText = `background:${bg};color:white;padding:0.75rem 1.25rem;border-radius:0.5rem;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:0.875rem;font-family:Inter,sans-serif;display:flex;align-items:center;gap:0.5rem;pointer-events:auto;animation:fadeIn 0.3s ease;`;
+    toast.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;">${type === 'error' ? 'error' : (type === 'warning' ? 'warning' : 'check_circle')}</span> <span>${message}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+window.showToast = showToast;
 
 // _initApp: called by bootApp() AFTER Turso data is loaded
 function _initApp() {
@@ -660,9 +696,19 @@ window.render_pengeluaran = () => {
     tbody.innerHTML = '';
 
     if (data.expenseTypes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">Belum ada data jenis pengeluaran</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">Belum ada data jenis pengeluaran</td></tr>';
         return;
     }
+
+    // Extract unique solar suppliers
+    const knownSuppliers = new Set();
+    (data.solar || []).forEach(s => {
+        if (s.supplier && s.supplier.trim()) knownSuppliers.add(s.supplier.trim().toUpperCase());
+    });
+    (data.expenseTypes || []).forEach(e => {
+        if (e.linkedSolarSupplier && e.linkedSolarSupplier.trim()) knownSuppliers.add(e.linkedSolarSupplier.trim().toUpperCase());
+    });
+    const solarSupplierList = Array.from(knownSuppliers).sort();
 
     const sortedExpenses = [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0));
     sortedExpenses.forEach((exp, index) => {
@@ -680,8 +726,15 @@ window.render_pengeluaran = () => {
             <td>${formatCurrency(exp.basePrice || 0)}</td>
             <td>
                 <select class="form-control form-control-sm" style="font-size:0.75rem; padding:0.2rem" onchange="updatePengeluaranLinkedBuyer('${exp.id}', this.value)">
-                    <option value="">- Tidak Konek -</option>
+                    <option value="">- Tidak -</option>
                     ${getData().buyers.map(b => `<option value="${b.id}" ${b.id === exp.linkedBuyerId ? 'selected' : ''}>${b.name}</option>`).join('')}
+                </select>
+            </td>
+            <td>
+                <select class="form-control form-control-sm" style="font-size:0.75rem; padding:0.2rem; min-width: 110px;" onchange="updatePengeluaranLinkedSupplier('${exp.id}', this.value)">
+                    <option value="">- Tidak -</option>
+                    ${solarSupplierList.map(sup => `<option value="${sup}" ${sup === (exp.linkedSolarSupplier || '').toUpperCase() ? 'selected' : ''}>${sup}</option>`).join('')}
+                    <option value="__NEW__">+ Tambah Pemasok...</option>
                 </select>
             </td>
             <td>
@@ -693,6 +746,352 @@ window.render_pengeluaran = () => {
         `;
         tbody.appendChild(tr);
     });
+};
+
+// --- FIFO SOLAR CALCULATION ENGINE ---
+function getCalculatedSolarRecords(data) {
+    const expenseMap = {};
+    (data.expenseTypes || []).forEach(e => {
+        expenseMap[e.id] = e;
+    });
+
+    // 1. Separate Masuk Batches (sorted chronologically)
+    const masukBatches = (data.solar || [])
+        .filter(s => s.type === 'Masuk')
+        .map(s => ({
+            id: s.id,
+            date: s.date,
+            supplier: (s.supplier || 'LAINNYA').toUpperCase().trim(),
+            type: 'Masuk',
+            amount: parseFloat(s.amount) || 0,
+            remaining: parseFloat(s.amount) || 0,
+            description: s.description || '',
+            isAuto: false,
+            created_at: s.created_at || s.date
+        }));
+
+    masukBatches.sort((a, b) => new Date(a.date) - new Date(b.date) || (a.created_at > b.created_at ? 1 : -1));
+
+    // 2. Separate Manual Keluar
+    const manualKeluar = (data.solar || [])
+        .filter(s => s.type === 'Keluar')
+        .map(s => ({
+            id: s.id,
+            date: s.date,
+            supplier: (s.supplier || 'LAINNYA').toUpperCase().trim(),
+            type: 'Keluar',
+            amount: parseFloat(s.amount) || 0,
+            description: s.description || '',
+            isAuto: false,
+            created_at: s.created_at || s.date
+        }));
+
+    // 3. Extract daily automatic usage from transactions
+    const dailyUsages = {};
+    (data.transactions || []).forEach(tx => {
+        if (!tx.expenseDetails) return;
+        const date = tx.date;
+        let txDetails = typeof tx.expenseDetails === 'string' ? JSON.parse(tx.expenseDetails) : tx.expenseDetails;
+        if (!Array.isArray(txDetails)) return;
+
+        txDetails.forEach(d => {
+            const exp = expenseMap[d.expenseId];
+            if (!exp) return;
+
+            const isSolar = (exp.linkedSolarSupplier && exp.linkedSolarSupplier.trim()) ||
+                            (exp.name && exp.name.toUpperCase().includes('SOLAR'));
+
+            if (isSolar) {
+                const qty = parseFloat(d.qty) || 0;
+                if (qty > 0) {
+                    if (!dailyUsages[date]) {
+                        dailyUsages[date] = {
+                            date: date,
+                            qty: 0,
+                            expNames: new Set()
+                        };
+                    }
+                    dailyUsages[date].qty += qty;
+                    if (exp.name) dailyUsages[date].expNames.add(exp.name);
+                }
+            }
+        });
+    });
+
+    // 4. Sort usage dates chronologically (ascending)
+    const sortedUsageDates = Object.keys(dailyUsages).sort((a, b) => new Date(a) - new Date(b));
+    const autoKeluar = [];
+
+    // 5. FIFO deduction across batches
+    sortedUsageDates.forEach(date => {
+        const usage = dailyUsages[date];
+        let needed = usage.qty;
+        const expNamesStr = Array.from(usage.expNames).join(', ');
+
+        const dateOverride = (data.solarDateOverrides && data.solarDateOverrides[date]);
+        if (dateOverride) {
+            autoKeluar.push({
+                id: `auto-${date}-${dateOverride.trim().toUpperCase()}`,
+                date: date,
+                type: 'Keluar',
+                supplier: dateOverride.trim().toUpperCase(),
+                amount: needed,
+                description: `PEMAKAIAN HARIAN [${expNamesStr}]`,
+                isAuto: true
+            });
+            return;
+        }
+
+        // FIFO: Deduct from available batches with date <= usage date
+        for (let i = 0; i < masukBatches.length && needed > 0; i++) {
+            const batch = masukBatches[i];
+            if (batch.date <= date && batch.remaining > 0) {
+                const take = Math.min(needed, batch.remaining);
+                batch.remaining -= take;
+                needed -= take;
+
+                autoKeluar.push({
+                    id: `auto-${date}-${batch.supplier}-${batch.id || i}`,
+                    date: date,
+                    type: 'Keluar',
+                    supplier: batch.supplier,
+                    amount: take,
+                    description: `PEMAKAIAN HARIAN (FIFO) [${expNamesStr}]`,
+                    isAuto: true
+                });
+            }
+        }
+
+        // If needed > 0, check any remaining batch (flexible)
+        if (needed > 0) {
+            for (let i = 0; i < masukBatches.length && needed > 0; i++) {
+                if (masukBatches[i].remaining > 0) {
+                    const take = Math.min(needed, masukBatches[i].remaining);
+                    masukBatches[i].remaining -= take;
+                    needed -= take;
+
+                    autoKeluar.push({
+                        id: `auto-${date}-${masukBatches[i].supplier}-${masukBatches[i].id || i}`,
+                        date: date,
+                        type: 'Keluar',
+                        supplier: masukBatches[i].supplier,
+                        amount: take,
+                        description: `PEMAKAIAN HARIAN (FIFO) [${expNamesStr}]`,
+                        isAuto: true
+                    });
+                }
+            }
+        }
+
+        // If still needed > 0 (stock exhausted)
+        if (needed > 0) {
+            const defaultSup = getDefaultSolarSupplier(data) || 'INTERNAL';
+            autoKeluar.push({
+                id: `auto-${date}-${defaultSup}-def`,
+                date: date,
+                type: 'Keluar',
+                supplier: defaultSup,
+                amount: needed,
+                description: `PEMAKAIAN HARIAN [${expNamesStr}]`,
+                isAuto: true
+            });
+        }
+    });
+
+    return [
+        ...masukBatches.map(b => ({
+            id: b.id,
+            date: b.date,
+            supplier: b.supplier,
+            type: 'Masuk',
+            amount: b.amount,
+            description: b.description,
+            isAuto: false
+        })),
+        ...manualKeluar,
+        ...autoKeluar
+    ];
+}
+
+window.render_solar = () => {
+    const data = getData();
+    const tbody = document.getElementById('tbody-solar');
+    if (!tbody) return;
+
+    const startEl = document.getElementById('filter-solar-start');
+    const endEl = document.getElementById('filter-solar-end');
+    const startDate = startEl ? startEl.value : '';
+    const endDate = endEl ? endEl.value : '';
+
+    // 1. Get calculated FIFO solar records
+    const solarRecords = getCalculatedSolarRecords(data);
+
+    // 2. Update Filter Pemasok Dropdown (collect all suppliers before filtering)
+    const allSuppliers = new Set();
+    solarRecords.forEach(s => {
+        const sup = (s.supplier || 'LAINNYA').toUpperCase().trim();
+        allSuppliers.add(sup);
+    });
+    (data.solarSuppliers || []).forEach(s => {
+        const name = typeof s === 'string' ? s : s.name;
+        if (name && name.trim()) allSuppliers.add(name.trim().toUpperCase());
+    });
+    (data.expenseTypes || []).forEach(e => {
+        if (e.linkedSolarSupplier && e.linkedSolarSupplier.trim()) {
+            allSuppliers.add(e.linkedSolarSupplier.trim().toUpperCase());
+        }
+    });
+    if (data.solarDateOverrides) {
+        Object.values(data.solarDateOverrides).forEach(sup => {
+            if (sup && sup.trim()) allSuppliers.add(sup.trim().toUpperCase());
+        });
+    }
+
+    const filterSelect = document.getElementById('filter-solar-supplier');
+    if (filterSelect) {
+        const currentFilter = filterSelect.value;
+        let optHtml = '<option value="">Semua Pemasok</option>';
+        Array.from(allSuppliers).sort().forEach(sup => {
+            optHtml += `<option value="${sup}" ${sup === currentFilter ? 'selected' : ''}>${sup}</option>`;
+        });
+        filterSelect.innerHTML = optHtml;
+    }
+
+    const activeSupplierFilter = filterSelect ? filterSelect.value : '';
+
+    // Filter by Date Range and Supplier
+    let filteredRecords = solarRecords.filter(s => {
+        if (startDate && s.date < startDate) return false;
+        if (endDate && s.date > endDate) return false;
+        if (activeSupplierFilter && (s.supplier || 'LAINNYA').toUpperCase().trim() !== activeSupplierFilter) return false;
+        return true;
+    });
+
+    // 5. Calculate stats per supplier & global on the filtered set
+    const supplierStats = {}; // { [sup]: { masuk: 0, keluar: 0, sisa: 0 } }
+    let totalMasukGlobal = 0;
+    let totalKeluarGlobal = 0;
+
+    filteredRecords.forEach(s => {
+        const sup = (s.supplier || 'LAINNYA').toUpperCase().trim();
+        if (!supplierStats[sup]) supplierStats[sup] = { masuk: 0, keluar: 0, sisa: 0 };
+        if (s.type === 'Masuk') {
+            supplierStats[sup].masuk += s.amount;
+            totalMasukGlobal += s.amount;
+        } else if (s.type === 'Keluar') {
+            supplierStats[sup].keluar += s.amount;
+            totalKeluarGlobal += s.amount;
+        }
+    });
+
+    Object.keys(supplierStats).forEach(sup => {
+        supplierStats[sup].sisa = supplierStats[sup].masuk - supplierStats[sup].keluar;
+    });
+    const saldoGlobal = totalMasukGlobal - totalKeluarGlobal;
+
+    // 6. Sort for Display (descending by date)
+    filteredRecords.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // 7. Render Table Rows
+    if (filteredRecords.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding:2rem;">Belum ada data solar pada rentang tanggal/filter yang dipilih</td></tr>';
+    } else {
+        const masterSuppliers = getAllSolarSuppliers(data);
+        let html = '';
+        filteredRecords.forEach(s => {
+            const supName = (s.supplier || '-').toUpperCase();
+
+            // Build options for this row's supplier dropdown
+            const rowSuppliers = [...masterSuppliers];
+            if (supName && supName !== '-' && !rowSuppliers.includes(supName)) {
+                rowSuppliers.push(supName);
+            }
+            let rowSupplierOptions = '';
+            rowSuppliers.forEach(sup => {
+                const isSelected = (sup === supName) ? 'selected' : '';
+                rowSupplierOptions += `<option value="${sup}" ${isSelected}>${sup}</option>`;
+            });
+            rowSupplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
+
+            html += `
+                <tr style="${s.isAuto ? 'background: #f8fafc;' : ''}">
+                    <td>${formatDate(s.date)}</td>
+                    <td>
+                        <select class="form-control select-table-supplier" 
+                                style="padding: 0.25rem 0.5rem; font-size: 0.85rem; font-weight: 600; width: 100%; min-width: 135px; border-radius: 6px; cursor: pointer; color: #1e293b; background: white; border: 1px solid #cbd5e1;" 
+                                data-prev-val="${supName}" 
+                                onchange="handleTableSolarSupplierChange(this, '${s.id}', ${s.isAuto ? 'true' : 'false'}, '${s.date}')">
+                            ${rowSupplierOptions}
+                        </select>
+                    </td>
+                    <td>
+                        <span class="badge" style="background: ${s.type === 'Masuk' ? '#dcfce7' : '#fee2e2'}; color: ${s.type === 'Masuk' ? '#166534' : '#991b1b'};">
+                            ${s.type} ${s.isAuto ? '(Otomatis)' : ''}
+                        </span>
+                    </td>
+                    <td style="font-weight: bold; color: ${s.type === 'Masuk' ? '#166534' : '#991b1b'};">
+                        ${s.type === 'Masuk' ? '+' : '-'} ${s.amount.toLocaleString('id-ID')} Liter
+                    </td>
+                    <td style="font-size: 0.85rem; color: #64748b;">${s.description || '-'}</td>
+                    <td style="text-align: center;">
+                        ${s.isAuto ? '<span style="color:#94a3b8; font-size:0.75rem;">(Otomatis)</span>' : `
+                        <div class="d-flex justify-center" style="gap:0.25rem;">
+                            <button class="btn-icon" style="color:var(--primary-color)" onclick="editSolar('${s.id}')"><span class="material-symbols-outlined" style="font-size:18px">edit</span></button>
+                            <button class="btn-icon" style="color:var(--danger)" onclick="deleteSolar('${s.id}')"><span class="material-symbols-outlined" style="font-size:18px">delete</span></button>
+                        </div>
+                        `}
+                    </td>
+                </tr>
+            `;
+        });
+        tbody.innerHTML = html;
+    }
+
+    // 8. Render Summary Cards
+    let summaryDiv = document.getElementById('solar-summary-cards');
+    if (!summaryDiv) {
+        summaryDiv = document.createElement('div');
+        summaryDiv.id = 'solar-summary-cards';
+        summaryDiv.style.display = 'flex';
+        summaryDiv.style.gap = '1rem';
+        summaryDiv.style.marginBottom = '1.5rem';
+        summaryDiv.style.flexWrap = 'wrap';
+        
+        const cardBody = document.querySelector('#solar .card-body');
+        if (cardBody) {
+            cardBody.insertBefore(summaryDiv, cardBody.firstChild);
+        }
+    }
+
+    let summaryHtml = `
+        <div style="flex: 1; min-width: 180px; background: white; padding: 1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); border-left: 4px solid var(--primary-color); box-shadow: var(--shadow-sm);">
+            <div style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; margin-bottom: 0.25rem;">Total Solar Masuk</div>
+            <div style="font-size: 1.25rem; font-weight: 700; color: #1e293b;">${totalMasukGlobal.toLocaleString('id-ID')} Liter</div>
+        </div>
+        <div style="flex: 1; min-width: 180px; background: white; padding: 1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); border-left: 4px solid var(--danger); box-shadow: var(--shadow-sm);">
+            <div style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; margin-bottom: 0.25rem;">Total Pemakaian</div>
+            <div style="font-size: 1.25rem; font-weight: 700; color: var(--danger);">- ${totalKeluarGlobal.toLocaleString('id-ID')} Liter</div>
+        </div>
+        <div style="flex: 1; min-width: 180px; background: white; padding: 1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); border-left: 4px solid ${saldoGlobal >= 0 ? '#10b981' : '#ef4444'}; box-shadow: var(--shadow-sm);">
+            <div style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; margin-bottom: 0.25rem;">Total Sisa Saldo</div>
+            <div style="font-size: 1.25rem; font-weight: 700; color: ${saldoGlobal >= 0 ? '#10b981' : '#ef4444'};">${saldoGlobal.toLocaleString('id-ID')} Liter</div>
+        </div>
+    `;
+
+    // Per-supplier stock cards
+    Object.keys(supplierStats).sort().forEach(sup => {
+        const st = supplierStats[sup];
+        summaryHtml += `
+        <div style="flex: 1; min-width: 180px; background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 1rem 1.25rem; border-radius: var(--radius-lg); color: white; box-shadow: var(--shadow-md);">
+            <div style="font-size: 0.75rem; font-weight: 600; color: #c7d2fe; text-transform: uppercase; margin-bottom: 0.25rem;">Stok: ${sup}</div>
+            <div style="font-size: 1.25rem; font-weight: 700; color: ${st.sisa >= 0 ? '#38bdf8' : '#f87171'};">${st.sisa.toLocaleString('id-ID')} Liter</div>
+            <div style="font-size: 0.7rem; color: #94a3b8; margin-top: 0.25rem;">Masuk: ${st.masuk.toLocaleString('id-ID')}L | Pakai: ${st.keluar.toLocaleString('id-ID')}L</div>
+        </div>`;
+    });
+
+    if (summaryDiv) {
+        summaryDiv.innerHTML = summaryHtml;
+    }
 };
 
 window.render_potongan = () => {
@@ -1240,19 +1639,23 @@ function savePengeluaran() {
     let item;
     const expTypes = data.expenseTypes;
     let oldLinkedBuyerId = null;
+    let oldLinkedSolarSupplier = null;
     if (currentEditId) {
         const oldExp = expTypes.find(e => e.id === currentEditId);
-        if (oldExp) oldLinkedBuyerId = oldExp.linkedBuyerId || null;
+        if (oldExp) {
+            oldLinkedBuyerId = oldExp.linkedBuyerId || null;
+            oldLinkedSolarSupplier = oldExp.linkedSolarSupplier || null;
+        }
     }
 
     if (currentEditId) {
         const index = data.expenseTypes.findIndex(e => e.id === currentEditId);
         if (index > -1) {
-            data.expenseTypes[index] = { ...data.expenseTypes[index], name, category, nature, unit, basePrice, order, linkedBuyerId: oldLinkedBuyerId };
+            data.expenseTypes[index] = { ...data.expenseTypes[index], name, category, nature, unit, basePrice, order, linkedBuyerId: oldLinkedBuyerId, linkedSolarSupplier: oldLinkedSolarSupplier };
             item = data.expenseTypes[index];
         }
     } else {
-        item = { id: generateId(), name, category, nature, unit, basePrice, order, linkedBuyerId: null };
+        item = { id: generateId(), name, category, nature, unit, basePrice, order, linkedBuyerId: null, linkedSolarSupplier: null };
         data.expenseTypes.push(item);
     }
 
@@ -1264,7 +1667,8 @@ function savePengeluaran() {
         unit: item.unit,
         baseprice: item.basePrice,
         sort_order: item.order,
-        linked_buyer_id: item.linkedBuyerId
+        linked_buyer_id: item.linkedBuyerId,
+        linked_solar_supplier: item.linkedSolarSupplier
     };
 
     saveData(data, 'expense_types', supabaseItem);
@@ -2806,51 +3210,183 @@ window.updateNetProfitSummary = () => {
 // --- Penagihan ---
 window.render_penagihan = () => {
     const data = getData();
-    const container = document.querySelector('#penagihan .card-body');
+    const container = document.getElementById('penagihan-content') || document.querySelector('#penagihan .card-body');
+    if (!container) return;
 
-    // Unpaid "Sale Segments"
+    const selectBuyerEl = document.getElementById('filter-penagihan-buyer');
+    const startEl = document.getElementById('filter-penagihan-start');
+    const endEl = document.getElementById('filter-penagihan-end');
+
+    const filterBuyerId = selectBuyerEl ? selectBuyerEl.value : '';
+    const startDate = startEl ? startEl.value : '';
+    const endDate = endEl ? endEl.value : '';
+
+    // 1. Gather all unpaid sales segments
     const buyerSales = [];
-    data.transactions.filter(t => t.status !== 'Lunas').forEach(t => {
-        if (t.sales) {
+    (data.transactions || []).filter(t => t.status !== 'Lunas').forEach(t => {
+        // Filter By Date
+        if (startDate && t.date < startDate) return;
+        if (endDate && t.date > endDate) return;
+
+        if (t.sales && t.sales.length > 0) {
             t.sales.forEach(s => {
-                buyerSales.push({ txId: t.id, date: t.date, buyerId: s.buyerId, amount: s.total, qty: s.qty });
+                buyerSales.push({
+                    txId: t.id,
+                    date: t.date,
+                    buyerId: s.buyerId,
+                    amount: parseFloat(s.total) || 0,
+                    qty: parseFloat(s.qty) || 0,
+                    driverCount: s.driverCount || 1,
+                    hargaBatu: s.hargaBatu || 0
+                });
             });
-        } else if (t.buyerId) { // Fallback for old simple transactions
-            buyerSales.push({ txId: t.id, date: t.date, buyerId: t.buyerId, amount: t.totalAmount, qty: t.qty || 0 });
+        } else if (t.buyerId) {
+            buyerSales.push({
+                txId: t.id,
+                date: t.date,
+                buyerId: t.buyerId,
+                amount: parseFloat(t.totalAmount) || 0,
+                qty: parseFloat(t.qty) || 0,
+                driverCount: 1,
+                hargaBatu: 0
+            });
         }
     });
 
-    if (buyerSales.length === 0) {
-        container.innerHTML = '<p class="text-center text-muted" style="padding:2rem;">Tidak ada tagihan yang belum lunas (Piutang bersih).</p>';
-        return;
-    }
-
+    // 2. Group unpaid sales by buyerId
     const grouped = {};
     buyerSales.forEach(s => {
+        if (!s.buyerId) return;
         if (!grouped[s.buyerId]) grouped[s.buyerId] = [];
         grouped[s.buyerId].push(s);
     });
 
-    let html = '';
+    // 3. Populate / Update Buyer Dropdown
+    if (selectBuyerEl) {
+        const currentSelected = selectBuyerEl.value;
+        const sortedBuyers = [...(data.buyers || [])].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-    for (const buyerId in grouped) {
-        const buyer = data.buyers.find(b => b.id === buyerId);
+        let selectHtml = '<option value="">Semua Pembeli</option>';
+        sortedBuyers.forEach(b => {
+            const unpaidCount = grouped[b.id] ? grouped[b.id].length : 0;
+            const marker = unpaidCount > 0 ? ` • (${unpaidCount} Tagihan)` : '';
+            const isSelected = b.id === currentSelected ? 'selected' : '';
+            selectHtml += `<option value="${b.id}" ${isSelected}>${b.name}${marker}</option>`;
+        });
+
+        // Any buyer IDs in grouped that are not in master list
+        Object.keys(grouped).forEach(bId => {
+            if (!sortedBuyers.some(b => b.id === bId)) {
+                const isSelected = bId === currentSelected ? 'selected' : '';
+                selectHtml += `<option value="${bId}" ${isSelected}>Pembeli Tidak Dikenal (${bId}) • (${grouped[bId].length} Tagihan)</option>`;
+            }
+        });
+
+        selectBuyerEl.innerHTML = selectHtml;
+        if (currentSelected && [...selectBuyerEl.options].some(opt => opt.value === currentSelected)) {
+            selectBuyerEl.value = currentSelected;
+        }
+    }
+
+    // 4. Check if global list is empty
+    if (!filterBuyerId && buyerSales.length === 0) {
+        container.innerHTML = `
+            <div style="text-align:center; padding:3.5rem 1.5rem; background:#f8fafc; border-radius:var(--radius-lg); border:1px dashed var(--border-color);">
+                <span class="material-symbols-outlined" style="font-size: 48px; color: #10b981; margin-bottom: 0.5rem; display: inline-block;">task_alt</span>
+                <h3 style="font-size: 1.1rem; color: #1e293b; margin-bottom: 0.25rem;">Semua Tagihan Sudah Lunas</h3>
+                <p style="color: #64748b; font-size: 0.875rem; margin: 0;">Tidak ada tagihan yang belum lunas (Piutang bersih Rp 0).</p>
+            </div>
+        `;
+        return;
+    }
+
+    // 5. If specific buyer is selected but has no unpaid sales
+    if (filterBuyerId) {
+        const segments = grouped[filterBuyerId] || [];
+        if (segments.length === 0) {
+            const buyer = (data.buyers || []).find(b => b.id === filterBuyerId);
+            const bName = buyer ? buyer.name : 'Pembeli ini';
+            container.innerHTML = `
+                <div style="text-align:center; padding:3.5rem 1.5rem; background:#f8fafc; border-radius:var(--radius-lg); border:1px dashed var(--border-color);">
+                    <span class="material-symbols-outlined" style="font-size: 48px; color: #10b981; margin-bottom: 0.5rem; display: inline-block;">check_circle</span>
+                    <h3 style="font-size: 1.1rem; color: #1e293b; margin-bottom: 0.25rem;">Tidak Ada Tagihan untuk "${bName}"</h3>
+                    <p style="color: #64748b; font-size: 0.875rem; margin: 0;">Semua transaksi penjualan untuk pembeli ini berstatus lunas atau belum ada transaksi.</p>
+                </div>
+            `;
+            return;
+        }
+    }
+
+    // 6. Determine buyer IDs to render
+    const buyerIdsToRender = filterBuyerId ? [filterBuyerId] : Object.keys(grouped);
+
+    // 7. Calculate overall stats for rendered buyers
+    let grandSales = 0;
+    let grandUnpaidCount = 0;
+
+    buyerIdsToRender.forEach(bId => {
+        const segments = grouped[bId] || [];
+        grandSales += segments.reduce((sum, s) => sum + s.amount, 0);
+        grandUnpaidCount += segments.length;
+    });
+
+    // 8. Render HTML
+    let html = `
+        <!-- Ringkasan Statistik Penagihan -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+            <div style="background: white; padding: 1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); border-left: 4px solid var(--primary-color); box-shadow: var(--shadow-sm);">
+                <div style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; margin-bottom: 0.25rem;">Total Tagihan</div>
+                <div style="font-size: 1.25rem; font-weight: 700; color: #1e293b;">${formatCurrency(grandSales)}</div>
+                <div style="font-size: 0.75rem; color: #64748b; margin-top: 0.25rem;">${grandUnpaidCount} transaksi belum lunas</div>
+            </div>
+            <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 1rem 1.25rem; border-radius: var(--radius-lg); color: white; box-shadow: var(--shadow-md);">
+                <div style="font-size: 0.75rem; font-weight: 600; color: #c7d2fe; text-transform: uppercase; margin-bottom: 0.25rem;">Total Piutang</div>
+                <div style="font-size: 1.25rem; font-weight: 700; color: #38bdf8;">${formatCurrency(grandSales)}</div>
+                <div style="font-size: 0.75rem; color: #cbd5e1; margin-top: 0.25rem;">${filterBuyerId ? 'Tagihan pembeli terpilih' : `${buyerIdsToRender.length} pembeli terdaftar`}</div>
+            </div>
+        </div>
+    `;
+
+    for (const buyerId of buyerIdsToRender) {
+        const buyer = (data.buyers || []).find(b => b.id === buyerId);
         const bName = buyer ? buyer.name : 'Unknown';
-        const segments = grouped[buyerId];
+        const segments = grouped[buyerId] || [];
         const totalSales = segments.reduce((sum, s) => sum + s.amount, 0);
 
-        // Find all deductions linked to this specific buyer
-        const buyerDeductions = (data.deductions || []).filter(p => p.buyerId === buyerId);
-        const totalBuyerDeductions = buyerDeductions.reduce((sum, p) => sum + p.amount, 0);
-        const totalFinalTagihan = totalSales - totalBuyerDeductions;
+        const totalFinalTagihan = totalSales;
+
+        // Unique transaction IDs for this buyer
+        const uniqueTxIds = [...new Set(segments.map(s => s.txId))];
 
         html += `
-            <div style="border:1px solid var(--border-color); border-radius:var(--radius-lg); margin-bottom:1.5rem; overflow:hidden;">
-                <div style="background:#f8fafc; padding:1rem 1.5rem; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; font-size:1.1rem; color:var(--primary-color)">${bName}</h3>
-                    <div style="text-align:right">
-                        <div style="font-size:0.75rem; color:#64748b; margin-bottom:2px">Total Piutang Bersih:</div>
-                        <div style="font-weight:700; color:var(--danger); font-size:1.1rem">${formatCurrency(totalFinalTagihan)}</div>
+            <div style="border:1px solid var(--border-color); border-radius:var(--radius-lg); margin-bottom:1.5rem; overflow:hidden; background:white; box-shadow:var(--shadow-sm);">
+                <div style="background:#f8fafc; padding:1rem 1.5rem; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+                    <div>
+                        <div class="d-flex align-center" style="gap:0.5rem; flex-wrap:wrap;">
+                            <span class="material-symbols-outlined" style="color:var(--primary-color); font-size:22px;">account_balance_wallet</span>
+                            <h3 style="margin:0; font-size:1.15rem; color:#1e293b; font-weight:600;">${bName}</h3>
+                            <span class="badge" style="background:rgba(79, 70, 229, 0.1); color:var(--primary-color); font-size:0.75rem; border:1px solid rgba(79, 70, 229, 0.2);">${segments.length} Transaksi</span>
+                            <span class="badge" style="background:rgba(16, 185, 129, 0.1); color:var(--success); font-size:0.75rem;">${buyer?.category || 'Umum'}</span>
+                        </div>
+                        <div style="font-size:0.75rem; color:#64748b; margin-top:0.25rem;">
+                            ${buyer?.address ? `Alamat: ${buyer.address} | ` : ''}Satuan: ${buyer?.unit || 'Ritase'} | Harga Satuan: ${formatCurrency(buyer?.unitPrice || 0)}
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                        <div style="text-align:right; margin-right: 0.5rem;">
+                            <div style="font-size:0.75rem; color:#64748b; margin-bottom:2px">Total Piutang Bersih:</div>
+                            <div style="font-weight:700; color:var(--danger); font-size:1.25rem">${formatCurrency(totalFinalTagihan)}</div>
+                        </div>
+                        ${segments.length > 0 ? `
+                            <button class="btn" style="background:#e2e8f0; color:#334155; padding:0.4rem 0.85rem; font-size:0.8rem; border-radius:var(--radius-md); gap:0.35rem; border: 1px solid #cbd5e1;" onclick="printTagihan('${buyerId}')" title="Cetak tagihan ${bName}">
+                                <span class="material-symbols-outlined" style="font-size:18px;">print</span> Cetak
+                            </button>
+                        ` : ''}
+                        ${uniqueTxIds.length > 0 ? `
+                            <button class="btn" style="background:#10b981; color:white; padding:0.4rem 0.85rem; font-size:0.8rem; border-radius:var(--radius-md); gap:0.35rem;" onclick="markAllAsLunasForBuyer('${buyerId}')" title="Lunasi semua transaksi ${bName}">
+                                <span class="material-symbols-outlined" style="font-size:18px;">done_all</span> Lunasi Semua
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
                 <div class="table-responsive">
@@ -2859,35 +3395,44 @@ window.render_penagihan = () => {
                             <tr>
                                 <th>Tanggal</th>
                                 <th>Keterangan</th>
-                                <th class="text-right">Jumlah</th>
-                                <th>Aksi</th>
+                                <th>Volume (Qty)</th>
+                                <th class="text-right">Jumlah (Rp)</th>
+                                <th style="width: 130px; text-align: center;">Aksi</th>
                             </tr>
                         </thead>
                         <tbody>
+                            ${segments.length === 0 ? '<tr><td colspan="5" class="text-center text-muted" style="padding:1rem;">Tidak ada transaksi penjualan tertunda</td></tr>' : ''}
                             ${segments.map(s => `
                                 <tr>
                                     <td>${formatDate(s.date)}</td>
-                                    <td>Jual Barang (${s.qty || 0} unit)</td>
-                                    <td class="text-right">${formatCurrency(s.amount)}</td>
                                     <td>
-                                        <button class="btn btn-sm" style="background:var(--success); color:white; padding:0.2rem 0.6rem; font-size:0.7rem;" onclick="markAsLunas('${s.txId}')">Tandai Lunas</button>
+                                        <div style="font-weight:500; color:#1e293b;">Penjualan Ritase / Batu</div>
+                                        <div style="font-size:0.75rem; color:#64748b;">Jumlah Sopir: ${s.driverCount || 1}</div>
+                                    </td>
+                                    <td><strong>${s.qty || 0}</strong> <span style="font-size:0.75rem; color:#64748b;">${buyer?.unit || 'unit'}</span></td>
+                                    <td class="text-right" style="font-weight:600; color:#1e293b;">${formatCurrency(s.amount)}</td>
+                                    <td style="text-align: center;">
+                                        <button class="btn btn-sm" style="background:var(--success); color:white; padding:0.25rem 0.65rem; font-size:0.75rem; border-radius:var(--radius-md); gap:0.25rem;" onclick="markAsLunas('${s.txId}')" title="Tandai Transaksi Lunas">
+                                            <span class="material-symbols-outlined" style="font-size:16px;">check</span> Lunas
+                                        </button>
                                     </td>
                                 </tr>
                             `).join('')}
-                            ${buyerDeductions.map(p => `
-                                <tr style="background:#fef2f2">
-                                    <td>${formatDate(p.dateStart || p.date)}</td>
-                                    <td style="color:var(--danger)">POTONGAN: ${p.description}</td>
-                                    <td class="text-right" style="color:var(--danger)">- ${formatCurrency(p.amount)}</td>
-                                    <td></td>
-                                </tr>
-                            `).join('')}
+ 
                         </tbody>
+                        <tfoot>
+                            <tr style="background:#f8fafc; font-weight:700; border-top:2px solid var(--border-color);">
+                                <td colspan="3" style="text-align:right; color:#475569; font-size:0.85rem;">TOTAL PIUTANG BERSIH (${bName}):</td>
+                                <td class="text-right" style="color:var(--danger); font-size:1.05rem;">${formatCurrency(totalFinalTagihan)}</td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
                     </table>
                 </div>
             </div>
         `;
     }
+
     container.innerHTML = html;
 };
 
@@ -2898,9 +3443,377 @@ window.markAsLunas = (txId) => {
         if (tx) {
             tx.status = 'Lunas';
             tx.paidAt = new Date().toISOString();
-            saveData(data, 'transactions', tx);
+            saveData(data, 'transactions', {
+                id: tx.id,
+                status: 'Lunas'
+            });
+            showToast('Transaksi berhasil ditandai LUNAS!');
             render_penagihan();
         }
+    }
+};
+
+window.markAllAsLunasForBuyer = (buyerId) => {
+    const data = getData();
+    const buyer = (data.buyers || []).find(b => b.id === buyerId);
+    const buyerName = buyer ? buyer.name : 'pembeli ini';
+
+    // Find all unpaid transactions containing sales for this buyer
+    const unpaidTxs = (data.transactions || []).filter(t => {
+        if (t.status === 'Lunas') return false;
+        if (t.sales && t.sales.some(s => s.buyerId === buyerId)) return true;
+        if (t.buyerId === buyerId) return true;
+        return false;
+    });
+
+    if (unpaidTxs.length === 0) {
+        alert('Tidak ada transaksi belum lunas untuk ' + buyerName);
+        return;
+    }
+
+    if (confirm(`Apakah Anda yakin ingin menandai SEMUA (${unpaidTxs.length}) transaksi untuk ${buyerName} sebagai LUNAS?`)) {
+        const now = new Date().toISOString();
+        unpaidTxs.forEach(tx => {
+            tx.status = 'Lunas';
+            tx.paidAt = now;
+            saveData(data, 'transactions', {
+                id: tx.id,
+                status: 'Lunas'
+            });
+        });
+        showToast(`Semua transaksi untuk ${buyerName} berhasil dilunasi!`);
+        render_penagihan();
+    }
+};
+
+window.printTagihan = (buyerId) => {
+    const data = getData();
+    const buyer = (data.buyers || []).find(b => b.id === buyerId);
+    if (!buyer) return;
+
+    const startEl = document.getElementById('filter-penagihan-start');
+    const endEl = document.getElementById('filter-penagihan-end');
+    const startDate = startEl ? startEl.value : '';
+    const endDate = endEl ? endEl.value : '';
+
+    // Collect buyer sales
+    const segments = [];
+    (data.transactions || []).filter(t => t.status !== 'Lunas').forEach(t => {
+        if (startDate && t.date < startDate) return;
+        if (endDate && t.date > endDate) return;
+
+        if (t.sales && t.sales.length > 0) {
+            t.sales.forEach(s => {
+                if (s.buyerId === buyerId) {
+                    segments.push({ txId: t.id, date: t.date, amount: parseFloat(s.total) || 0, qty: parseFloat(s.qty) || 0, driverCount: s.driverCount || 1 });
+                }
+            });
+        } else if (t.buyerId === buyerId) {
+            segments.push({ txId: t.id, date: t.date, amount: parseFloat(t.totalAmount) || 0, qty: parseFloat(t.qty) || 0, driverCount: 1 });
+        }
+    });
+
+    const totalSales = segments.reduce((sum, s) => sum + s.amount, 0);
+    const grandTotal = totalSales;
+
+    const periodText = (startDate || endDate) 
+        ? `Periode: ${startDate ? formatDate(startDate) : '-'} s.d ${endDate ? formatDate(endDate) : '-'}` 
+        : 'Seluruh Tagihan Aktif';
+
+    let html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Cetak Tagihan - ${buyer.name}</title>
+            <style>
+                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.2; padding: 20px; font-size: 14px; background: white; }
+                .header { text-align: center; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+                .header h1 { margin: 0 0 5px 0; font-size: 24px; color: #0f172a; }
+                .info-table { width: 100%; margin-bottom: 15px; }
+                .info-table td { padding: 2px 0; }
+                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 5px 8px; text-align: left; }
+                .data-table th { background: #f8fafc; font-weight: 600; color: #475569; }
+                .text-right { text-align: right !important; }
+                .text-center { text-align: center !important; }
+                .total-row th { background: #f1f5f9; font-size: 16px; color: #0f172a; padding: 8px 10px; }
+                @media print {
+                    body { -webkit-print-color-adjust: exact; padding: 0; }
+                    .no-print { display: none; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="no-print" style="margin-bottom:20px; text-align:right;">
+                <button onclick="window.print()" style="padding:10px 20px; background:#10b981; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold; font-size: 14px;">🖨️ Cetak Sekarang</button>
+            </div>
+            
+            <div class="header">
+                <img src="${window.location.origin}/HEADER%20RESEP.png" alt="Header CV RESEP" style="width: 100%; max-width: 800px; height: auto; display: block; margin: 0 auto 15px auto;">
+                <h1 style="font-size: 20px;">INVOICE PENAGIHAN</h1>
+                <p style="margin:0; color:#64748b;">${periodText}</p>
+            </div>
+
+            <table class="info-table">
+                <tr>
+                    <td style="width: 120px; color:#64748b;">Kepada Yth.</td>
+                    <td style="font-weight: bold; font-size: 16px;">: ${buyer.name}</td>
+                </tr>
+                <tr>
+                    <td style="color:#64748b;">Alamat</td>
+                    <td>: ${buyer.address || '-'}</td>
+                </tr>
+                <tr>
+                    <td style="color:#64748b;">Tanggal Cetak</td>
+                    <td>: ${formatDate()}</td>
+                </tr>
+            </table>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;" class="text-center">No</th>
+                        <th>Tanggal</th>
+                        <th>Keterangan</th>
+                        <th class="text-center">Qty / Vol</th>
+                        <th class="text-right">Jumlah (Rp)</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+
+    let no = 1;
+    if (segments.length === 0) {
+        html += `<tr><td colspan="5" class="text-center" style="padding: 20px; color:#64748b;">Tidak ada rincian tagihan</td></tr>`;
+    }
+
+    segments.forEach(s => {
+        html += `
+            <tr>
+                <td class="text-center">${no++}</td>
+                <td>${formatDate(s.date)}</td>
+                <td>Penjualan Barang (${s.driverCount || 1} Sopir)</td>
+                <td class="text-center">${s.qty || 0} ${buyer.unit || 'unit'}</td>
+                <td class="text-right">${formatCurrency(s.amount)}</td>
+            </tr>
+        `;
+    });
+
+ 
+
+    html += `
+                </tbody>
+                <tfoot>
+                    <tr class="total-row">
+                        <th colspan="4" class="text-right">TOTAL TAGIHAN BERSIH :</th>
+                        <th class="text-right" style="color: #b91c1c;">${formatCurrency(grandTotal)}</th>
+                    </tr>
+                </tfoot>
+            </table>
+
+            <div style="margin-top: 30px; text-align: right; padding-right: 50px;">
+                <p style="margin-bottom: 60px; color:#64748b;">Hormat Kami,</p>
+                <p style="font-weight: bold; border-bottom: 1px solid #1e293b; display: inline-block; padding-bottom: 2px;">CV. RESEP</p>
+            </div>
+        </body>
+        </html>
+    `;
+
+    const printWin = window.open('', '_blank');
+    if (printWin) {
+        printWin.document.open();
+        printWin.document.write(html);
+        printWin.document.close();
+        printWin.focus();
+        setTimeout(() => printWin.print(), 500);
+    } else {
+        alert('Browser memblokir popup. Izinkan popup untuk mencetak tagihan.');
+    }
+};
+
+window.printRekapSolar = () => {
+    const data = getData();
+    const startEl = document.getElementById('filter-solar-start');
+    const endEl = document.getElementById('filter-solar-end');
+    const filterSelect = document.getElementById('filter-solar-supplier');
+
+    const startDate = startEl ? startEl.value : '';
+    const endDate = endEl ? endEl.value : '';
+    const activeSupplierFilter = filterSelect ? filterSelect.value : '';
+
+    // 1. Get calculated FIFO solar records
+    const solarRecords = getCalculatedSolarRecords(data);
+
+    // Filter by Date Range and Supplier
+    let filteredRecords = solarRecords.filter(s => {
+        if (startDate && s.date < startDate) return false;
+        if (endDate && s.date > endDate) return false;
+        if (activeSupplierFilter && (s.supplier || 'LAINNYA').toUpperCase().trim() !== activeSupplierFilter) return false;
+        return true;
+    });
+
+    // Sort chronological (ascending) for reporting & running balance
+    filteredRecords.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    // Calculate totals & stats
+    let totalMasuk = 0;
+    let totalKeluar = 0;
+    const supplierStats = {};
+
+    filteredRecords.forEach(s => {
+        const sup = (s.supplier || 'LAINNYA').toUpperCase().trim();
+        if (!supplierStats[sup]) supplierStats[sup] = { masuk: 0, keluar: 0, sisa: 0 };
+        if (s.type === 'Masuk') {
+            totalMasuk += s.amount;
+            supplierStats[sup].masuk += s.amount;
+        } else if (s.type === 'Keluar') {
+            totalKeluar += s.amount;
+            supplierStats[sup].keluar += s.amount;
+        }
+    });
+
+    Object.keys(supplierStats).forEach(sup => {
+        supplierStats[sup].sisa = supplierStats[sup].masuk - supplierStats[sup].keluar;
+    });
+    const totalSaldo = totalMasuk - totalKeluar;
+
+    const periodText = (startDate || endDate)
+        ? `Periode: ${startDate ? formatDate(startDate) : '-'} s.d ${endDate ? formatDate(endDate) : '-'}`
+        : 'Seluruh Periode';
+    const supplierText = activeSupplierFilter ? `Pemasok: ${activeSupplierFilter}` : 'Semua Pemasok';
+
+    let runningBalance = 0;
+    let rowsHtml = '';
+    if (filteredRecords.length === 0) {
+        rowsHtml = `<tr><td colspan="6" class="text-center" style="padding: 20px; color:#64748b;">Tidak ada transaksi data solar pada rentang filter ini.</td></tr>`;
+    } else {
+        filteredRecords.forEach((s, idx) => {
+            const masuk = s.type === 'Masuk' ? s.amount : 0;
+            const keluar = s.type === 'Keluar' ? s.amount : 0;
+            runningBalance += (masuk - keluar);
+
+            rowsHtml += `
+                <tr>
+                    <td class="text-center">${idx + 1}</td>
+                    <td>${formatDate(s.date)}</td>
+                    <td style="font-weight: 600;">${(s.supplier || '-').toUpperCase()}</td>
+                    <td class="text-right" style="color: #166534; font-weight: ${masuk > 0 ? '600' : 'normal'};">${masuk > 0 ? masuk.toLocaleString('id-ID') : '-'}</td>
+                    <td class="text-right" style="color: #991b1b; font-weight: ${keluar > 0 ? '600' : 'normal'};">${keluar > 0 ? keluar.toLocaleString('id-ID') : '-'}</td>
+                    <td class="text-right" style="font-weight: bold; color: ${runningBalance >= 0 ? '#0f172a' : '#b91c1c'};">${runningBalance.toLocaleString('id-ID')}</td>
+                </tr>
+            `;
+        });
+    }
+
+    // Supplier summary cards in print
+    let supCardsHtml = '';
+    Object.keys(supplierStats).sort().forEach(sup => {
+        const st = supplierStats[sup];
+        supCardsHtml += `
+            <div style="flex: 1; min-width: 140px; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 10px; background: #f8fafc; font-size: 12px;">
+                <div style="font-weight: bold; color: #334155; margin-bottom: 2px;">Stok ${sup}</div>
+                <div style="font-size: 14px; font-weight: bold; color: ${st.sisa >= 0 ? '#0f766e' : '#b91c1c'};">${st.sisa.toLocaleString('id-ID')} Liter</div>
+                <div style="font-size: 11px; color: #64748b;">Msk: ${st.masuk.toLocaleString('id-ID')}L | Kel: ${st.keluar.toLocaleString('id-ID')}L</div>
+            </div>
+        `;
+    });
+
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Cetak Rekapitulasi Solar</title>
+            <style>
+                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.2; padding: 20px; font-size: 13px; background: white; }
+                .header { text-align: center; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; }
+                .header h1 { margin: 0 0 4px 0; font-size: 20px; color: #0f172a; }
+                .info-table { width: 100%; margin-bottom: 12px; }
+                .info-table td { padding: 2px 0; font-size: 13px; }
+                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 5px 8px; text-align: left; }
+                .data-table th { background: #f8fafc; font-weight: 600; color: #475569; }
+                .text-right { text-align: right !important; }
+                .text-center { text-align: center !important; }
+                .total-row th { background: #f1f5f9; font-size: 14px; color: #0f172a; padding: 6px 8px; }
+                @media print {
+                    body { -webkit-print-color-adjust: exact; padding: 0; }
+                    .no-print { display: none; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="no-print" style="margin-bottom:20px; text-align:right;">
+                <button onclick="window.print()" style="padding:8px 18px; background:#10b981; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold; font-size: 13px;">🖨️ Cetak Sekarang</button>
+            </div>
+            
+            <div class="header">
+                <img src="${window.location.origin}/HEADER%20RESEP.png" alt="Header CV RESEP" style="width: 100%; max-width: 800px; height: auto; display: block; margin: 0 auto 12px auto;">
+                <h1>REKAPITULASI PEMAKAIAN & STOK SOLAR</h1>
+                <p style="margin:0; color:#64748b; font-size: 13px;">${periodText} | ${supplierText}</p>
+            </div>
+
+            <table class="info-table">
+                <tr>
+                    <td style="width: 120px; color:#64748b;">Tanggal Cetak</td>
+                    <td style="font-weight: 600;">: ${formatDate()}</td>
+                    <td style="text-align: right; color:#64748b;">Total Data: <strong>${filteredRecords.length} Transaksi</strong></td>
+                </tr>
+            </table>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 40px;" class="text-center">No</th>
+                        <th style="width: 120px;">Tanggal</th>
+                        <th>Pemasok</th>
+                        <th style="width: 110px;" class="text-right">Masuk (L)</th>
+                        <th style="width: 110px;" class="text-right">Keluar (L)</th>
+                        <th style="width: 120px;" class="text-right">Saldo (L)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rowsHtml}
+                </tbody>
+                <tfoot>
+                    <tr class="total-row">
+                        <th colspan="3" class="text-right">TOTAL :</th>
+                        <th class="text-right" style="color: #166534;">+ ${totalMasuk.toLocaleString('id-ID')}</th>
+                        <th class="text-right" style="color: #991b1b;">- ${totalKeluar.toLocaleString('id-ID')}</th>
+                        <th class="text-right" style="color: ${totalSaldo >= 0 ? '#0f766e' : '#b91c1c'};">${totalSaldo.toLocaleString('id-ID')}</th>
+                    </tr>
+                </tfoot>
+            </table>
+
+            <div style="margin-top: 15px; margin-bottom: 20px;">
+                <div style="font-weight: bold; font-size: 12px; color: #475569; margin-bottom: 6px; text-transform: uppercase;">Ringkasan Stok Per Pemasok (Periode Ini):</div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    ${supCardsHtml || '<div style="font-size:12px; color:#94a3b8;">-</div>'}
+                </div>
+            </div>
+
+            <div style="margin-top: 30px; display: flex; justify-content: space-between; padding: 0 40px;">
+                <div style="text-align: center;">
+                    <p style="margin-bottom: 50px; color:#64748b; font-size: 13px;">Petugas Lapangan,</p>
+                    <p style="font-weight: bold; border-bottom: 1px solid #1e293b; display: inline-block; padding-bottom: 2px; min-width: 120px;">( &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; )</p>
+                </div>
+                <div style="text-align: center;">
+                    <p style="margin-bottom: 50px; color:#64748b; font-size: 13px;">Hormat Kami,</p>
+                    <p style="font-weight: bold; border-bottom: 1px solid #1e293b; display: inline-block; padding-bottom: 2px;">CV. RESEP</p>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+
+    const printWin = window.open('', '_blank');
+    if (printWin) {
+        printWin.document.open();
+        printWin.document.write(html);
+        printWin.document.close();
+        printWin.focus();
+        setTimeout(() => printWin.print(), 500);
+    } else {
+        alert('Browser memblokir popup. Izinkan popup untuk mencetak rekapitulasi.');
     }
 };
 
@@ -3684,6 +4597,434 @@ async function executeBulkDelete(config, ids) {
     updateBulkDeleteButton(config.type);
 }
 
+// --- SOLAR MANAGEMENT ---
+// --- SOLAR MANAGEMENT ---
+window.saveSolarSupplierToDatabase = async (name) => {
+    if (!name || !name.trim() || name === '__NEW__' || name === '-') return;
+    const cleanName = name.trim().toUpperCase();
+    const data = getData();
+    if (!data.solarSuppliers) data.solarSuppliers = [];
+
+    let existing = data.solarSuppliers.find(s => (typeof s === 'string' ? s : s.name).toUpperCase() === cleanName);
+    let item;
+    if (existing) {
+        item = typeof existing === 'string' ? { id: generateId(), name: cleanName, created_at: new Date().toISOString() } : existing;
+    } else {
+        item = {
+            id: generateId(),
+            name: cleanName,
+            created_at: new Date().toISOString()
+        };
+        data.solarSuppliers.push(item);
+    }
+
+    try {
+        await saveData(data, 'solar_suppliers', {
+            id: item.id,
+            name: item.name,
+            created_at: item.created_at || new Date().toISOString()
+        });
+        console.log(`✅ Pemasok solar "${cleanName}" tersimpan ke database.`);
+    } catch (err) {
+        console.error("Gagal menyimpan supplier ke database:", err);
+    }
+    return item;
+};
+
+function getAllSolarSuppliers(data) {
+    const supSet = new Set();
+    (data.solarSuppliers || []).forEach(s => {
+        const name = typeof s === 'string' ? s : s.name;
+        if (name && name.trim()) supSet.add(name.trim().toUpperCase());
+    });
+    (data.solar || []).forEach(s => {
+        if (s.supplier && s.supplier.trim()) supSet.add(s.supplier.trim().toUpperCase());
+    });
+    (data.expenseTypes || []).forEach(e => {
+        if (e.linkedSolarSupplier && e.linkedSolarSupplier.trim()) {
+            supSet.add(e.linkedSolarSupplier.trim().toUpperCase());
+        }
+    });
+    if (data.solarDateOverrides) {
+        Object.values(data.solarDateOverrides).forEach(sup => {
+            if (sup && sup.trim()) supSet.add(sup.trim().toUpperCase());
+        });
+    }
+    return Array.from(supSet).sort();
+}
+
+window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
+    let chosenSupplier = selectEl.value;
+    if (chosenSupplier === '__NEW__') {
+        const input = prompt('Masukkan Nama Pemasok Solar Baru (Contoh: PT. PERTAMINA, MAS SEPTA, A):');
+        if (!input || !input.trim()) {
+            selectEl.value = selectEl.getAttribute('data-prev-val') || '';
+            return;
+        }
+        chosenSupplier = input.trim().toUpperCase();
+    }
+
+    // Save new supplier to database
+    await window.saveSolarSupplierToDatabase(chosenSupplier);
+
+    const data = getData();
+
+    if (isAuto) {
+        if (!data.solarDateOverrides) data.solarDateOverrides = {};
+        data.solarDateOverrides[date] = chosenSupplier;
+
+        // Also update linked supplier on solar expenses
+        const solarExps = (data.expenseTypes || []).filter(e => 
+            (e.name && e.name.toUpperCase().includes('SOLAR')) || e.linkedSolarSupplier
+        );
+        for (const exp of solarExps) {
+            exp.linkedSolarSupplier = chosenSupplier;
+            const supabaseItem = {
+                id: exp.id,
+                name: exp.name,
+                category: exp.category,
+                nature: exp.nature,
+                unit: exp.unit,
+                baseprice: exp.basePrice,
+                sort_order: exp.order,
+                linked_buyer_id: exp.linkedBuyerId,
+                linked_solar_supplier: exp.linkedSolarSupplier
+            };
+            await saveData(data, 'expense_types', supabaseItem);
+        }
+
+        saveData(data);
+        render_solar();
+        if (window.render_pengeluaran) window.render_pengeluaran();
+    } else {
+        if (!data.solar) data.solar = [];
+        const index = data.solar.findIndex(s => s.id === id);
+        if (index > -1) {
+            data.solar[index].supplier = chosenSupplier;
+            const solarItem = data.solar[index];
+            await saveData(data, 'solar', solarItem);
+            render_solar();
+            if (window.render_pengeluaran) window.render_pengeluaran();
+        }
+    }
+};
+
+window.openAddSolarSupplierModal = () => {
+    const data = getData();
+    const solarExpenses = (data.expenseTypes || []).filter(e => 
+        (e.name && e.name.toUpperCase().includes('SOLAR')) || e.linkedSolarSupplier
+    );
+
+    let expenseCheckboxes = '';
+    if (solarExpenses.length > 0) {
+        expenseCheckboxes = `
+            <div class="form-group" style="margin-top: 1rem; border-top: 1px dashed #e2e8f0; padding-top: 0.75rem;">
+                <label style="font-size: 0.85rem; font-weight: 600; color: #475569;">Hubungkan Pengeluaran Otomatis (Opsional):</label>
+                <div style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.25rem;">
+                    ${solarExpenses.map(exp => `
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; font-weight: normal; cursor: pointer;">
+                            <input type="checkbox" name="linked_solar_exp" value="${exp.id}">
+                            <span>${exp.name} ${exp.linkedSolarSupplier ? `<small style="color:#64748b;">(Saat ini: ${exp.linkedSolarSupplier})</small>` : ''}</span>
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    const formHtml = `
+        <form id="form-add-supplier" autocomplete="off">
+            <div class="form-group">
+                <label>Nama Pemasok Solar <span style="color:var(--danger)">*</span></label>
+                <input type="text" id="new-solar-supplier-name" class="form-control" placeholder="Contoh: PT. PERTAMINA, MAS SEPTA, A" required oninput="this.value = this.value.toUpperCase()">
+            </div>
+            <div class="form-group">
+                <label>Stok Awal / Beli Solar (Liter) <small style="color:#64748b;">(Opsional, isi jika ada pengisian awal)</small></label>
+                <input type="number" id="new-solar-initial-stock" class="form-control" step="0.01" placeholder="0" value="0">
+            </div>
+            <div class="form-group">
+                <label>Tanggal Masuk</label>
+                <input type="date" id="new-solar-date" class="form-control" value="${new Date().toISOString().split('T')[0]}">
+            </div>
+            <div class="form-group">
+                <label>Keterangan</label>
+                <input type="text" id="new-solar-supplier-desc" class="form-control" value="STOK AWAL PEMASOK" oninput="this.value = this.value.toUpperCase()">
+            </div>
+            ${expenseCheckboxes}
+            <div class="form-actions" style="margin-top: 1.5rem;">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary">Simpan Pemasok</button>
+            </div>
+        </form>
+    `;
+
+    openModal('Tambah Pemasok Solar', formHtml);
+
+    document.getElementById('form-add-supplier').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const supplierName = document.getElementById('new-solar-supplier-name').value.trim().toUpperCase();
+        if (!supplierName) {
+            alert('Nama pemasok wajib diisi!');
+            return;
+        }
+
+        // Save supplier to database
+        await window.saveSolarSupplierToDatabase(supplierName);
+
+        const initialStock = parseFloat(document.getElementById('new-solar-initial-stock').value) || 0;
+        const date = document.getElementById('new-solar-date').value || new Date().toISOString().split('T')[0];
+        const desc = document.getElementById('new-solar-supplier-desc').value.trim().toUpperCase();
+
+        const currentData = getData();
+        if (!currentData.solar) currentData.solar = [];
+
+        // If initial stock > 0, create initial solar transaction
+        if (initialStock > 0) {
+            const solarItem = {
+                id: generateId(),
+                date: date,
+                supplier: supplierName,
+                type: 'Masuk',
+                amount: initialStock,
+                description: desc || 'STOK AWAL PEMASOK',
+                created_at: new Date().toISOString()
+            };
+            currentData.solar.push(solarItem);
+            await saveData(currentData, 'solar', solarItem);
+        }
+
+        // Link any selected expense types to this new supplier
+        const checkedBoxes = document.querySelectorAll('input[name="linked_solar_exp"]:checked');
+        for (const cb of checkedBoxes) {
+            const expId = cb.value;
+            const expIndex = (currentData.expenseTypes || []).findIndex(exp => exp.id === expId);
+            if (expIndex > -1) {
+                currentData.expenseTypes[expIndex].linkedSolarSupplier = supplierName;
+                const item = currentData.expenseTypes[expIndex];
+                const supabaseItem = {
+                    id: item.id,
+                    name: item.name,
+                    category: item.category,
+                    nature: item.nature,
+                    unit: item.unit,
+                    baseprice: item.basePrice,
+                    sort_order: item.order,
+                    linked_buyer_id: item.linkedBuyerId,
+                    linked_solar_supplier: item.linkedSolarSupplier
+                };
+                await saveData(currentData, 'expense_types', supabaseItem);
+            }
+        }
+
+        closeModal();
+        if (window.render_solar) window.render_solar();
+        if (window.render_pengeluaran) window.render_pengeluaran();
+        alert(`Pemasok "${supplierName}" berhasil disimpan ke database!`);
+    });
+};
+
+function getDefaultSolarSupplier(data) {
+    const solarExps = (data.expenseTypes || []).filter(e => e.linkedSolarSupplier && e.linkedSolarSupplier.trim());
+    if (solarExps.length > 0) {
+        return solarExps[0].linkedSolarSupplier.trim().toUpperCase();
+    }
+    const allSuppliers = getAllSolarSuppliers(data);
+    return allSuppliers.length > 0 ? allSuppliers[0] : '';
+}
+
+window.handleSolarSupplierChange = async (selectEl) => {
+    if (selectEl.value === '__NEW__') {
+        const newName = prompt('Masukkan Nama Pemasok Baru (Contoh: PT. PERTAMINA, MAS SEPTA, A):');
+        if (newName && newName.trim()) {
+            const upper = newName.trim().toUpperCase();
+            await window.saveSolarSupplierToDatabase(upper);
+            let found = false;
+            for (let opt of selectEl.options) {
+                if (opt.value === upper) {
+                    opt.selected = true;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                const newOpt = document.createElement('option');
+                newOpt.value = upper;
+                newOpt.text = upper;
+                newOpt.selected = true;
+                selectEl.insertBefore(newOpt, selectEl.querySelector('option[value="__NEW__"]'));
+            }
+        } else {
+            selectEl.value = selectEl.getAttribute('data-prev-val') || '';
+        }
+    }
+    selectEl.setAttribute('data-prev-val', selectEl.value);
+};
+
+window.openAddSolarModal = () => {
+    document.getElementById('solar-id-field')?.remove();
+    const data = getData();
+    const suppliers = getAllSolarSuppliers(data);
+    const defaultSupplier = getDefaultSolarSupplier(data);
+
+    let supplierOptions = '';
+    if (!defaultSupplier && suppliers.length === 0) {
+        supplierOptions = '<option value="">-- Belum ada pemasok --</option>';
+    } else if (!defaultSupplier) {
+        supplierOptions = '<option value="">-- Pilih Pemasok --</option>';
+    }
+
+    suppliers.forEach(s => {
+        const isSelected = (s === defaultSupplier) ? 'selected' : '';
+        supplierOptions += `<option value="${s}" ${isSelected}>${s}</option>`;
+    });
+    supplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
+
+    const formHtml = `
+        <form id="form-solar" autocomplete="off">
+            <input type="hidden" id="solar-id" value="">
+            <div class="form-group">
+                <label>Tanggal</label>
+                <input type="date" id="solar-date" class="form-control" value="${new Date().toISOString().split('T')[0]}" required>
+            </div>
+            <div class="form-group">
+                <label>Pemasok</label>
+                <select id="solar-supplier" class="form-control" data-prev-val="${defaultSupplier}" onchange="handleSolarSupplierChange(this)" required>
+                    ${supplierOptions}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Jenis</label>
+                <select id="solar-type" class="form-control" required>
+                    <option value="Masuk">Masuk (Beli Solar)</option>
+                    <option value="Keluar">Keluar (Pemakaian Manual/Koreksi)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Jumlah (Liter)</label>
+                <input type="number" id="solar-amount" class="form-control" step="0.01" required>
+            </div>
+            <div class="form-group">
+                <label>Keterangan</label>
+                <input type="text" id="solar-description" class="form-control" oninput="this.value = this.value.toUpperCase()">
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary">Simpan</button>
+            </div>
+        </form>
+    `;
+
+    openModal('Tambah Data Solar', formHtml);
+    document.getElementById('form-solar').addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveSolar();
+    });
+};
+
+window.editSolar = (id) => {
+    const data = getData();
+    const solar = data.solar.find(s => s.id === id);
+    if (!solar) return;
+
+    const suppliers = getAllSolarSuppliers(data);
+    const activeSupplier = (solar.supplier || getDefaultSolarSupplier(data) || '').toUpperCase().trim();
+
+    let supplierOptions = '';
+    suppliers.forEach(s => {
+        const isSelected = (s === activeSupplier) ? 'selected' : '';
+        supplierOptions += `<option value="${s}" ${isSelected}>${s}</option>`;
+    });
+    if (activeSupplier && !suppliers.includes(activeSupplier)) {
+        supplierOptions = `<option value="${activeSupplier}" selected>${activeSupplier}</option>` + supplierOptions;
+    }
+    supplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
+
+    const formHtml = `
+        <form id="form-solar" autocomplete="off">
+            <input type="hidden" id="solar-id" value="${solar.id}">
+            <div class="form-group">
+                <label>Tanggal</label>
+                <input type="date" id="solar-date" class="form-control" value="${solar.date}" required>
+            </div>
+            <div class="form-group">
+                <label>Pemasok</label>
+                <select id="solar-supplier" class="form-control" data-prev-val="${activeSupplier}" onchange="handleSolarSupplierChange(this)" required>
+                    ${supplierOptions}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Jenis</label>
+                <select id="solar-type" class="form-control" required>
+                    <option value="Masuk" ${solar.type === 'Masuk' ? 'selected' : ''}>Masuk (Beli Solar)</option>
+                    <option value="Keluar" ${solar.type === 'Keluar' ? 'selected' : ''}>Keluar (Pemakaian Manual/Koreksi)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Jumlah (Liter)</label>
+                <input type="number" id="solar-amount" class="form-control" step="0.01" value="${solar.amount}" required>
+            </div>
+            <div class="form-group">
+                <label>Keterangan</label>
+                <input type="text" id="solar-description" class="form-control" value="${solar.description || ''}" oninput="this.value = this.value.toUpperCase()">
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary">Simpan</button>
+            </div>
+        </form>
+    `;
+
+    openModal('Edit Data Solar', formHtml);
+    document.getElementById('form-solar').addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveSolar();
+    });
+};
+
+window.saveSolar = async () => {
+    const id = document.getElementById('solar-id').value || generateId();
+    const data = getData();
+    
+    if (!data.solar) data.solar = [];
+
+    const solarItem = {
+        id,
+        date: document.getElementById('solar-date').value,
+        supplier: document.getElementById('solar-supplier').value,
+        type: document.getElementById('solar-type').value,
+        amount: parseFloat(document.getElementById('solar-amount').value) || 0,
+        description: document.getElementById('solar-description').value,
+        created_at: new Date().toISOString()
+    };
+
+    const index = data.solar.findIndex(s => s.id === id);
+    if (index >= 0) {
+        data.solar[index] = solarItem;
+    } else {
+        data.solar.push(solarItem);
+    }
+
+    if (solarItem.supplier) {
+        await window.saveSolarSupplierToDatabase(solarItem.supplier);
+    }
+
+    await saveData(data, 'solar', solarItem);
+    
+    closeModal();
+    if (window.render_solar) window.render_solar();
+};
+
+window.deleteSolar = async (id) => {
+    if (!confirm('Hapus data solar ini?')) return;
+    
+    const data = getData();
+    data.solar = data.solar.filter(s => s.id !== id);
+    saveData(data);
+    await deleteFromDatabase('solar', id);
+    
+    if (window.render_solar) window.render_solar();
+};
+
 // Add these to window so they are accessible if needed
 window.initBulkDeleteListeners = initBulkDeleteListeners;
 window.updateBulkDeleteButton = updateBulkDeleteButton;
@@ -3704,9 +5045,44 @@ window.updatePengeluaranLinkedBuyer = (id, buyerId) => {
             unit: item.unit,
             baseprice: item.basePrice,
             sort_order: item.order,
-            linked_buyer_id: item.linkedBuyerId
+            linked_buyer_id: item.linkedBuyerId,
+            linked_solar_supplier: item.linkedSolarSupplier
         };
         saveData(data, 'expense_types', supabaseItem);
+    }
+};
+
+window.updatePengeluaranLinkedSupplier = async (id, supplierVal) => {
+    let chosenSupplier = supplierVal;
+    if (supplierVal === '__NEW__') {
+        const input = prompt('Masukkan Nama Pemasok Solar (Contoh: A, B, PT. PERTAMINA):');
+        if (!input || !input.trim()) {
+            render_pengeluaran();
+            return;
+        }
+        chosenSupplier = input.trim().toUpperCase();
+    }
+
+    const data = getData();
+    const index = data.expenseTypes.findIndex(e => e.id === id);
+    if (index > -1) {
+        data.expenseTypes[index].linkedSolarSupplier = chosenSupplier ? chosenSupplier.toUpperCase() : null;
+        
+        const item = data.expenseTypes[index];
+        const supabaseItem = {
+            id: item.id,
+            name: item.name,
+            category: item.category,
+            nature: item.nature,
+            unit: item.unit,
+            baseprice: item.basePrice,
+            sort_order: item.order,
+            linked_buyer_id: item.linkedBuyerId,
+            linked_solar_supplier: item.linkedSolarSupplier
+        };
+        await saveData(data, 'expense_types', supabaseItem);
+        render_pengeluaran();
+        if (window.render_solar) window.render_solar();
     }
 };
 
