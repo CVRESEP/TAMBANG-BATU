@@ -56,6 +56,24 @@ export async function onRequestGet(context) {
                 created_at TEXT
             )
         `);
+        try {
+            await client.execute(`ALTER TABLE transactions ADD COLUMN status TEXT`);
+        } catch (e) {}
+        try {
+            await client.execute(`ALTER TABLE transactions ADD COLUMN paid_amount REAL`);
+        } catch (e) {}
+        try {
+            await client.execute(`ALTER TABLE transactions ADD COLUMN paid_at TEXT`);
+        } catch (e) {}
+        try {
+            await client.execute(`ALTER TABLE transactions ADD COLUMN payment_method TEXT`);
+        } catch (e) {}
+        try {
+            await client.execute(`ALTER TABLE transactions ADD COLUMN payment_note TEXT`);
+        } catch (e) {}
+        try {
+            await client.execute(`ALTER TABLE transactions ADD COLUMN payments TEXT`);
+        } catch (e) {}
     } catch (e) {
         console.error("Migration failed:", e);
     }

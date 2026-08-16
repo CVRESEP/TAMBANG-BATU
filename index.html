@@ -579,7 +579,7 @@
                                 <h2>Daftar Penagihan</h2>
                             </div>
                             <div class="d-flex align-center" style="gap: 0.75rem; flex-wrap: wrap;">
-                                <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                                <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 0.4rem;">
                                     <label style="font-size: 0.85rem; font-weight: 600; color: #475569; margin: 0; white-space: nowrap;">
                                         <span class="material-symbols-outlined" style="font-size: 18px; color: #64748b; vertical-align: middle;">calendar_month</span>
                                         Periode:
@@ -587,6 +587,9 @@
                                     <input type="date" id="filter-penagihan-start" class="form-control" style="padding: 0.35rem 0.5rem; width: auto; font-size: 0.85rem;" onchange="render_penagihan()">
                                     <span style="color: #64748b; font-weight: bold;">-</span>
                                     <input type="date" id="filter-penagihan-end" class="form-control" style="padding: 0.35rem 0.5rem; width: auto; font-size: 0.85rem;" onchange="render_penagihan()">
+                                    <button type="button" class="btn btn-sm" style="padding: 0.3rem 0.5rem; font-size: 0.75rem; background: #e2e8f0; color: #475569;" title="Tampilkan Semua Periode" onclick="document.getElementById('filter-penagihan-start').value=''; document.getElementById('filter-penagihan-end').value=''; render_penagihan();">
+                                        Semua
+                                    </button>
                                 </div>
                                 <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 0.5rem; border-left: 1px solid var(--border-color); padding-left: 0.75rem;">
                                     <label for="filter-penagihan-buyer" style="font-size: 0.85rem; font-weight: 600; color: #475569; margin: 0; white-space: nowrap; display: flex; align-items: center; gap: 0.25rem;">
@@ -595,6 +598,18 @@
                                     </label>
                                     <select id="filter-penagihan-buyer" class="form-control" style="padding: 0.35rem 0.65rem; width: auto; min-width: 180px; font-size: 0.85rem;" onchange="render_penagihan()">
                                         <option value="">Semua Pembeli</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 0.5rem; border-left: 1px solid var(--border-color); padding-left: 0.75rem;">
+                                    <label for="filter-penagihan-status" style="font-size: 0.85rem; font-weight: 600; color: #475569; margin: 0; white-space: nowrap; display: flex; align-items: center; gap: 0.25rem;">
+                                        <span class="material-symbols-outlined" style="font-size: 18px; color: #64748b;">filter_list</span>
+                                        Status:
+                                    </label>
+                                    <select id="filter-penagihan-status" class="form-control" style="padding: 0.35rem 0.65rem; width: auto; min-width: 140px; font-size: 0.85rem;" onchange="render_penagihan()">
+                                        <option value="">Semua Status</option>
+                                        <option value="Belum Lunas">Belum Lunas</option>
+                                        <option value="Sebagian">Sebagian (Kurang Bayar)</option>
+                                        <option value="Lunas">Lunas</option>
                                     </select>
                                 </div>
                             </div>

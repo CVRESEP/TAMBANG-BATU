@@ -110,7 +110,13 @@ async function fetchAllDataFromTurso() {
                 operationalExpense: t.operationalexpense,
                 retributionExpense: t.retributionexpense,
                 expenseDetails: typeof t.expenses === 'string' ? JSON.parse(t.expenses) : (t.expenses || []),
-                sales: typeof t.sales === 'string' ? JSON.parse(t.sales) : (t.sales || [])
+                sales: typeof t.sales === 'string' ? JSON.parse(t.sales) : (t.sales || []),
+                status: t.status || 'Belum Lunas',
+                paidAmount: t.paid_amount !== undefined && t.paid_amount !== null ? parseFloat(t.paid_amount) : (t.status === 'Lunas' ? (parseFloat(t.totalamount) || 0) : (parseFloat(t.paidAmount) || 0)),
+                paidAt: t.paid_at || t.paidAt || null,
+                paymentMethod: t.payment_method || t.paymentMethod || null,
+                paymentNote: t.payment_note || t.paymentNote || null,
+                payments: typeof t.payments === 'string' ? JSON.parse(t.payments) : (t.payments || [])
             })),
             profiles: (data.profiles || []).map(p => ({ ...p, fullName: p.full_name })),
             solar: data.solar || [],
@@ -373,10 +379,15 @@ function _initApp() {
     const formModal = document.getElementById('form-modal');
     const btnCloseModal = document.getElementById('btn-close-modal');
 
-    window.openModal = function (title, contentHtml) {
+    window.openModal = function (title, contentHtml, maxWidth = null) {
         document.getElementById('modal-title').textContent = title;
         const body = document.getElementById('modal-body-content');
         body.innerHTML = contentHtml;
+        if (maxWidth) {
+            formModal.style.maxWidth = maxWidth;
+        } else {
+            formModal.style.maxWidth = '500px';
+        }
         modalOverlay.classList.add('active');
         formModal.classList.add('active');
         setTimeout(() => focusFirstInput(body), 50);
@@ -385,6 +396,7 @@ function _initApp() {
     window.closeModal = function () {
         modalOverlay.classList.remove('active');
         formModal.classList.remove('active');
+        formModal.style.maxWidth = '';
     };
 
     function focusFirstInput(container) {
@@ -3241,6 +3253,113 @@ window.updateNetProfitSummary = () => {
     if (elNet) elNet.textContent = formatCurrency(netProfit);
 };
 
+// --- Helper Kalkulasi Pembayaran & Sisa Piutang Transaksi ---
+window.getTransactionPaymentInfo = (tx, buyerId = null) => {
+    if (!tx) {
+        return {
+            total: 0,
+            paid: 0,
+            remaining: 0,
+            status: 'Belum Lunas',
+            payments: [],
+            lastPayment: null
+        };
+    }
+
+    // 1. Calculate Total Tagihan for this transaction or buyer
+    let total = 0;
+    let txSales = [];
+    if (Array.isArray(tx.sales)) {
+        txSales = tx.sales;
+    } else if (typeof tx.sales === 'string' && tx.sales.trim()) {
+        try {
+            txSales = JSON.parse(tx.sales);
+            if (!Array.isArray(txSales)) txSales = [];
+        } catch (e) {
+            txSales = [];
+        }
+    }
+
+    if (buyerId && txSales.length > 0) {
+        const buyerSales = txSales.filter(s => s.buyerId === buyerId);
+        if (buyerSales.length > 0) {
+            total = buyerSales.reduce((sum, s) => sum + (parseFloat(s.total) || 0), 0);
+        } else {
+            total = parseFloat(tx.totalAmount || tx.totalamount) || 0;
+        }
+    } else {
+        total = parseFloat(tx.totalAmount || tx.totalamount) || 0;
+        if (total === 0 && txSales.length > 0) {
+            total = txSales.reduce((sum, s) => sum + (parseFloat(s.total) || 0), 0);
+        }
+    }
+
+    // 2. Parse Payments
+    let payments = [];
+    if (Array.isArray(tx.payments)) {
+        payments = [...tx.payments];
+    } else if (typeof tx.payments === 'string' && tx.payments.trim()) {
+        try {
+            payments = JSON.parse(tx.payments);
+            if (!Array.isArray(payments)) payments = [];
+        } catch (e) {
+            payments = [];
+        }
+    }
+
+    // 3. Calculate Paid Amount
+    let paid = 0;
+    if (payments.length > 0) {
+        paid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    } else if (tx.paidAmount !== undefined && tx.paidAmount !== null && tx.paidAmount > 0) {
+        paid = parseFloat(tx.paidAmount) || 0;
+    } else if (tx.paid_amount !== undefined && tx.paid_amount !== null && tx.paid_amount > 0) {
+        paid = parseFloat(tx.paid_amount) || 0;
+    } else if (tx.status === 'Lunas') {
+        paid = total;
+    }
+
+    total = Math.round(total * 100) / 100;
+    paid = Math.round(paid * 100) / 100;
+
+    // 4. Calculate Remaining Balance
+    let remaining = Math.max(0, Math.round((total - paid) * 100) / 100);
+    if (remaining < 0.5) remaining = 0;
+
+    // 5. Determine Accurate Status
+    let status = 'Belum Lunas';
+    if (paid >= total - 0.5 && total > 0) {
+        status = 'Lunas';
+        remaining = 0;
+    } else if (paid > 0) {
+        status = 'Sebagian';
+    } else {
+        status = 'Belum Lunas';
+    }
+
+    // 6. Extract Last Payment Info
+    let lastPayment = null;
+    if (payments.length > 0) {
+        lastPayment = payments[payments.length - 1];
+    } else if (tx.paidAt || tx.paid_at) {
+        lastPayment = {
+            date: tx.paidAt || tx.paid_at,
+            method: tx.paymentMethod || tx.payment_method || 'Tunai / Cash',
+            note: tx.paymentNote || tx.payment_note || '',
+            amount: paid
+        };
+    }
+
+    return {
+        total,
+        paid,
+        remaining,
+        status,
+        payments,
+        lastPayment
+    };
+};
+
 // --- Penagihan ---
 window.render_penagihan = () => {
     const data = getData();
@@ -3250,46 +3369,74 @@ window.render_penagihan = () => {
     const selectBuyerEl = document.getElementById('filter-penagihan-buyer');
     const startEl = document.getElementById('filter-penagihan-start');
     const endEl = document.getElementById('filter-penagihan-end');
+    const statusEl = document.getElementById('filter-penagihan-status');
 
     const filterBuyerId = selectBuyerEl ? selectBuyerEl.value : '';
     const startDate = startEl ? startEl.value : '';
     const endDate = endEl ? endEl.value : '';
+    const filterStatus = statusEl ? statusEl.value : '';
 
-    // 1. Gather all unpaid sales segments
-    const buyerSales = [];
-    (data.transactions || []).filter(t => t.status !== 'Lunas').forEach(t => {
-        // Filter By Date
+    // 1. Gather all sales segments with calculated partial payment information
+    const allBuyerSales = [];
+    (data.transactions || []).forEach(t => {
+        // Filter by Date
         if (startDate && t.date < startDate) return;
         if (endDate && t.date > endDate) return;
 
-        if (t.sales && t.sales.length > 0) {
-            t.sales.forEach(s => {
-                buyerSales.push({
+        let txSales = [];
+        if (Array.isArray(t.sales)) {
+            txSales = t.sales;
+        } else if (typeof t.sales === 'string' && t.sales.trim()) {
+            try {
+                txSales = JSON.parse(t.sales);
+                if (!Array.isArray(txSales)) txSales = [];
+            } catch (e) {
+                txSales = [];
+            }
+        }
+
+        if (txSales && txSales.length > 0) {
+            txSales.forEach(s => {
+                const bId = s.buyerId || t.buyerId || t.buyerid;
+                const payInfo = getTransactionPaymentInfo(t, bId);
+                allBuyerSales.push({
                     txId: t.id,
                     date: t.date,
-                    buyerId: s.buyerId,
+                    buyerId: bId,
                     amount: parseFloat(s.total) || 0,
                     qty: parseFloat(s.qty) || 0,
                     driverCount: s.driverCount || 1,
-                    hargaBatu: s.hargaBatu || 0
+                    hargaBatu: s.hargaBatu || 0,
+                    status: payInfo.status,
+                    paidAmount: payInfo.paid,
+                    remainingAmount: payInfo.remaining,
+                    lastPayment: payInfo.lastPayment,
+                    payments: payInfo.payments
                 });
             });
-        } else if (t.buyerId) {
-            buyerSales.push({
+        } else if (t.buyerId || t.buyerid) {
+            const bId = t.buyerId || t.buyerid;
+            const payInfo = getTransactionPaymentInfo(t, bId);
+            allBuyerSales.push({
                 txId: t.id,
                 date: t.date,
-                buyerId: t.buyerId,
-                amount: parseFloat(t.totalAmount) || 0,
+                buyerId: bId,
+                amount: parseFloat(t.totalAmount || t.totalamount) || 0,
                 qty: parseFloat(t.qty) || 0,
                 driverCount: 1,
-                hargaBatu: 0
+                hargaBatu: 0,
+                status: payInfo.status,
+                paidAmount: payInfo.paid,
+                remainingAmount: payInfo.remaining,
+                lastPayment: payInfo.lastPayment,
+                payments: payInfo.payments
             });
         }
     });
 
-    // 2. Group unpaid sales by buyerId
+    // 2. Group all sales by buyerId
     const grouped = {};
-    buyerSales.forEach(s => {
+    allBuyerSales.forEach(s => {
         if (!s.buyerId) return;
         if (!grouped[s.buyerId]) grouped[s.buyerId] = [];
         grouped[s.buyerId].push(s);
@@ -3302,17 +3449,19 @@ window.render_penagihan = () => {
 
         let selectHtml = '<option value="">Semua Pembeli</option>';
         sortedBuyers.forEach(b => {
-            const unpaidCount = grouped[b.id] ? grouped[b.id].length : 0;
-            const marker = unpaidCount > 0 ? ` • (${unpaidCount} Tagihan)` : '';
+            const bSegments = grouped[b.id] || [];
+            const unpaidCount = bSegments.filter(s => s.status !== 'Lunas').length;
+            const totalCount = bSegments.length;
+            const marker = totalCount > 0 ? ` • (${unpaidCount > 0 ? `${unpaidCount} Belum Lunas / ` : ''}${totalCount} Transaksi)` : '';
             const isSelected = b.id === currentSelected ? 'selected' : '';
             selectHtml += `<option value="${b.id}" ${isSelected}>${b.name}${marker}</option>`;
         });
 
-        // Any buyer IDs in grouped that are not in master list
+        // Any buyer IDs in grouped not in master list
         Object.keys(grouped).forEach(bId => {
             if (!sortedBuyers.some(b => b.id === bId)) {
                 const isSelected = bId === currentSelected ? 'selected' : '';
-                selectHtml += `<option value="${bId}" ${isSelected}>Pembeli Tidak Dikenal (${bId}) • (${grouped[bId].length} Tagihan)</option>`;
+                selectHtml += `<option value="${bId}" ${isSelected}>Pembeli (${bId}) • (${grouped[bId].length} Transaksi)</option>`;
             }
         });
 
@@ -3322,143 +3471,224 @@ window.render_penagihan = () => {
         }
     }
 
-    // 4. Check if global list is empty
-    if (!filterBuyerId && buyerSales.length === 0) {
+    // 4. Calculate Global Metrics for current date / buyer filter
+    const targetSalesForStats = filterBuyerId ? (grouped[filterBuyerId] || []) : allBuyerSales;
+    const grandTotalSales = targetSalesForStats.reduce((sum, s) => sum + s.amount, 0);
+    const grandTotalUnpaid = targetSalesForStats.reduce((sum, s) => sum + s.remainingAmount, 0);
+    const grandTotalPaid = targetSalesForStats.reduce((sum, s) => sum + s.paidAmount, 0);
+
+    const countUnpaid = targetSalesForStats.filter(s => s.status === 'Belum Lunas').length;
+    const countPartial = targetSalesForStats.filter(s => s.status === 'Sebagian').length;
+    const countPaid = targetSalesForStats.filter(s => s.status === 'Lunas').length;
+    const countTotal = targetSalesForStats.length;
+
+    // 5. Check if total list is empty
+    if (allBuyerSales.length === 0) {
         container.innerHTML = `
             <div style="text-align:center; padding:3.5rem 1.5rem; background:#f8fafc; border-radius:var(--radius-lg); border:1px dashed var(--border-color);">
-                <span class="material-symbols-outlined" style="font-size: 48px; color: #10b981; margin-bottom: 0.5rem; display: inline-block;">task_alt</span>
-                <h3 style="font-size: 1.1rem; color: #1e293b; margin-bottom: 0.25rem;">Semua Tagihan Sudah Lunas</h3>
-                <p style="color: #64748b; font-size: 0.875rem; margin: 0;">Tidak ada tagihan yang belum lunas (Piutang bersih Rp 0).</p>
+                <span class="material-symbols-outlined" style="font-size: 48px; color: #94a3b8; margin-bottom: 0.5rem; display: inline-block;">receipt_long</span>
+                <h3 style="font-size: 1.1rem; color: #1e293b; margin-bottom: 0.25rem;">Belum Ada Transaksi Penjualan</h3>
+                <p style="color: #64748b; font-size: 0.875rem; margin: 0;">Tidak ditemukan transaksi penjualan untuk periode filter yang dipilih.</p>
             </div>
         `;
         return;
     }
 
-    // 5. If specific buyer is selected but has no unpaid sales
-    if (filterBuyerId) {
-        const segments = grouped[filterBuyerId] || [];
-        if (segments.length === 0) {
-            const buyer = (data.buyers || []).find(b => b.id === filterBuyerId);
-            const bName = buyer ? buyer.name : 'Pembeli ini';
-            container.innerHTML = `
-                <div style="text-align:center; padding:3.5rem 1.5rem; background:#f8fafc; border-radius:var(--radius-lg); border:1px dashed var(--border-color);">
-                    <span class="material-symbols-outlined" style="font-size: 48px; color: #10b981; margin-bottom: 0.5rem; display: inline-block;">check_circle</span>
-                    <h3 style="font-size: 1.1rem; color: #1e293b; margin-bottom: 0.25rem;">Tidak Ada Tagihan untuk "${bName}"</h3>
-                    <p style="color: #64748b; font-size: 0.875rem; margin: 0;">Semua transaksi penjualan untuk pembeli ini berstatus lunas atau belum ada transaksi.</p>
-                </div>
-            `;
-            return;
-        }
-    }
-
-    // 6. Determine buyer IDs to render
+    // 6. Filter buyers according to buyer selection
     const buyerIdsToRender = filterBuyerId ? [filterBuyerId] : Object.keys(grouped);
 
-    // 7. Calculate overall stats for rendered buyers
-    let grandSales = 0;
-    let grandUnpaidCount = 0;
-
-    buyerIdsToRender.forEach(bId => {
-        const segments = grouped[bId] || [];
-        grandSales += segments.reduce((sum, s) => sum + s.amount, 0);
-        grandUnpaidCount += segments.length;
-    });
-
-    // 8. Render HTML
+    // 7. Render HTML with Metrics Header
     let html = `
         <!-- Ringkasan Statistik Penagihan -->
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
-            <div style="background: white; padding: 1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); border-left: 4px solid var(--primary-color); box-shadow: var(--shadow-sm);">
-                <div style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; margin-bottom: 0.25rem;">Total Tagihan</div>
-                <div style="font-size: 1.25rem; font-weight: 700; color: #1e293b;">${formatCurrency(grandSales)}</div>
-                <div style="font-size: 0.75rem; color: #64748b; margin-top: 0.25rem;">${grandUnpaidCount} transaksi belum lunas</div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+            <div style="background: white; padding: 1.1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); border-left: 4px solid var(--primary-color); box-shadow: var(--shadow-sm);">
+                <div style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; margin-bottom: 0.25rem;">Total Tagihan Penjualan</div>
+                <div style="font-size: 1.35rem; font-weight: 700; color: #1e293b;">${formatCurrency(grandTotalSales)}</div>
+                <div style="font-size: 0.75rem; color: #64748b; margin-top: 0.25rem;"><strong>${countTotal}</strong> total transaksi tercatat</div>
             </div>
-            <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 1rem 1.25rem; border-radius: var(--radius-lg); color: white; box-shadow: var(--shadow-md);">
-                <div style="font-size: 0.75rem; font-weight: 600; color: #c7d2fe; text-transform: uppercase; margin-bottom: 0.25rem;">Total Piutang</div>
-                <div style="font-size: 1.25rem; font-weight: 700; color: #38bdf8;">${formatCurrency(grandSales)}</div>
-                <div style="font-size: 0.75rem; color: #cbd5e1; margin-top: 0.25rem;">${filterBuyerId ? 'Tagihan pembeli terpilih' : `${buyerIdsToRender.length} pembeli terdaftar`}</div>
+            <div style="background: white; padding: 1.1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid #fecdd3; border-left: 4px solid #ef4444; box-shadow: var(--shadow-sm);">
+                <div style="font-size: 0.75rem; font-weight: 600; color: #dc2626; text-transform: uppercase; margin-bottom: 0.25rem;">Sisa Piutang (Belum Lunas)</div>
+                <div style="font-size: 1.35rem; font-weight: 700; color: #dc2626;">${formatCurrency(grandTotalUnpaid)}</div>
+                <div style="font-size: 0.75rem; color: #dc2626; margin-top: 0.25rem;"><strong>${countUnpaid}</strong> belum dibayar ${countPartial > 0 ? `• <strong>${countPartial}</strong> sebagian` : ''}</div>
+            </div>
+            <div style="background: white; padding: 1.1rem 1.25rem; border-radius: var(--radius-lg); border: 1px solid #bbf7d0; border-left: 4px solid #10b981; box-shadow: var(--shadow-sm);">
+                <div style="font-size: 0.75rem; font-weight: 600; color: #166534; text-transform: uppercase; margin-bottom: 0.25rem;">Sudah Diterima (Lunas)</div>
+                <div style="font-size: 1.35rem; font-weight: 700; color: #16a34a;">${formatCurrency(grandTotalPaid)}</div>
+                <div style="font-size: 0.75rem; color: #166534; margin-top: 0.25rem;"><strong>${countPaid}</strong> transaksi telah lunas</div>
             </div>
         </div>
     `;
 
+    let renderedBuyerCards = 0;
+
     for (const buyerId of buyerIdsToRender) {
-        const buyer = (data.buyers || []).find(b => b.id === buyerId);
-        const bName = buyer ? buyer.name : 'Unknown';
-        const segments = grouped[buyerId] || [];
-        const totalSales = segments.reduce((sum, s) => sum + s.amount, 0);
+        const buyer = (data.buyers || []).find(b => b.id === buyerId) || { name: 'Pembeli' };
+        const bName = buyer.name || 'Pembeli';
+        const rawSegments = grouped[buyerId] || [];
 
-        const totalFinalTagihan = totalSales;
+        // Apply status filter if active
+        let filteredSegments = rawSegments;
+        if (filterStatus) {
+            filteredSegments = rawSegments.filter(s => s.status === filterStatus);
+        }
 
-        // Unique transaction IDs for this buyer
-        const uniqueTxIds = [...new Set(segments.map(s => s.txId))];
+        if (filteredSegments.length === 0) continue;
+        renderedBuyerCards++;
+
+        const buyerTotalAll = rawSegments.reduce((sum, s) => sum + s.amount, 0);
+        const buyerTotalPaid = rawSegments.reduce((sum, s) => sum + s.paidAmount, 0);
+        const buyerTotalUnpaid = rawSegments.reduce((sum, s) => sum + s.remainingAmount, 0);
+
+        const buyerUnpaidCount = rawSegments.filter(s => s.status === 'Belum Lunas').length;
+        const buyerPartialCount = rawSegments.filter(s => s.status === 'Sebagian').length;
 
         html += `
-            <div style="border:1px solid var(--border-color); border-radius:var(--radius-lg); margin-bottom:1.5rem; overflow:hidden; background:white; box-shadow:var(--shadow-sm);">
-                <div style="background:#f8fafc; padding:1rem 1.5rem; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+            <div style="border: 1px solid var(--border-color); border-radius: var(--radius-lg); margin-bottom: 1.5rem; overflow: hidden; background: white; box-shadow: var(--shadow-sm);">
+                <div style="background: #f8fafc; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
                     <div>
-                        <div class="d-flex align-center" style="gap:0.5rem; flex-wrap:wrap;">
-                            <span class="material-symbols-outlined" style="color:var(--primary-color); font-size:22px;">account_balance_wallet</span>
-                            <h3 style="margin:0; font-size:1.15rem; color:#1e293b; font-weight:600;">${bName}</h3>
-                            <span class="badge" style="background:rgba(79, 70, 229, 0.1); color:var(--primary-color); font-size:0.75rem; border:1px solid rgba(79, 70, 229, 0.2);">${segments.length} Transaksi</span>
-                            <span class="badge" style="background:rgba(16, 185, 129, 0.1); color:var(--success); font-size:0.75rem;">${buyer?.category || 'Umum'}</span>
+                        <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                            <span class="material-symbols-outlined" style="color: var(--primary-color); font-size: 22px;">storefront</span>
+                            <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #0f172a; text-transform: uppercase;">${bName}</h3>
+                            <span class="badge badge-primary" style="font-size: 0.75rem;">${rawSegments.length} TRANSAKSI</span>
+                            <span class="badge" style="background: #e0e7ff; color: #4338ca; font-size: 0.75rem;">${buyer.type || 'PROYEK'}</span>
+                            ${buyerTotalUnpaid > 0 ? `<span class="badge" style="background: #fee2e2; color: #dc2626; font-size: 0.75rem;">${buyerUnpaidCount} BELUM LUNAS</span>` : `<span class="badge" style="background: #dcfce7; color: #166534; font-size: 0.75rem;">SEMUA LUNAS ✓</span>`}
+                            ${buyerPartialCount > 0 ? `<span class="badge" style="background: #fef3c7; color: #b45309; font-size: 0.75rem;">${buyerPartialCount} SEBAGIAN</span>` : ''}
                         </div>
-                        <div style="font-size:0.75rem; color:#64748b; margin-top:0.25rem;">
-                            ${buyer?.address ? `Alamat: ${buyer.address} | ` : ''}Satuan: ${buyer?.unit || 'Ritase'} | Harga Satuan: ${formatCurrency(buyer?.unitPrice || 0)}
+                        <div style="font-size: 0.8rem; color: #64748b; margin-top: 0.25rem;">
+                            Alamat: ${buyer.address || '-'} | Satuan: ${buyer.unit || '-'} | Harga Satuan: ${formatCurrency(buyer.pricePerUnit || 0)}
                         </div>
                     </div>
-                    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
-                        <div style="text-align:right; margin-right: 0.5rem;">
-                            <div style="font-size:0.75rem; color:#64748b; margin-bottom:2px">Total Piutang Bersih:</div>
-                            <div style="font-weight:700; color:var(--danger); font-size:1.25rem">${formatCurrency(totalFinalTagihan)}</div>
+                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                        <div style="text-align: right; background: #ffffff; padding: 0.35rem 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); font-size: 0.85rem;">
+                            <div style="color: #64748b; font-size: 0.75rem;">SISA PIUTANG: <strong style="color: ${buyerTotalUnpaid > 0 ? '#dc2626' : '#16a34a'}; font-size: 0.95rem;">${formatCurrency(buyerTotalUnpaid)}</strong></div>
+                            <div style="color: #64748b; font-size: 0.75rem;">TERBAYAR: <strong style="color: #16a34a;">${formatCurrency(buyerTotalPaid)}</strong> / <strong style="color: #1e293b;">${formatCurrency(buyerTotalAll)}</strong></div>
                         </div>
-                        ${segments.length > 0 ? `
-                            <button class="btn" style="background:#e2e8f0; color:#334155; padding:0.4rem 0.85rem; font-size:0.8rem; border-radius:var(--radius-md); gap:0.35rem; border: 1px solid #cbd5e1;" onclick="printTagihan('${buyerId}')" title="Cetak tagihan ${bName}">
-                                <span class="material-symbols-outlined" style="font-size:18px;">print</span> Cetak
+                        <button class="btn btn-secondary btn-sm" onclick="printTagihan('${buyerId}')" title="Cetak Rekap Tagihan & Rincian Piutang" style="display: flex; align-items: center; gap: 0.35rem;">
+                            <span class="material-symbols-outlined" style="font-size: 18px;">print</span> Cetak Invoice
+                        </button>
+                        ${buyerTotalUnpaid > 0 ? `
+                            <button class="btn btn-sm" style="background: #10b981; color: white; display: flex; align-items: center; gap: 0.35rem; font-weight: 700; padding: 0.45rem 0.9rem;" onclick="openBulkPaymentAllocationModal('${buyerId}')" title="Alokasikan Pembayaran Otomatis (FIFO / Cicilan)">
+                                <span class="material-symbols-outlined" style="font-size: 18px;">price_check</span> Catat Pembayaran Masuk
                             </button>
-                        ` : ''}
-                        ${uniqueTxIds.length > 0 ? `
-                            <button class="btn" style="background:#10b981; color:white; padding:0.4rem 0.85rem; font-size:0.8rem; border-radius:var(--radius-md); gap:0.35rem;" onclick="markAllAsLunasForBuyer('${buyerId}')" title="Lunasi semua transaksi ${bName}">
-                                <span class="material-symbols-outlined" style="font-size:18px;">done_all</span> Lunasi Semua
+                        ` : `
+                            <button class="btn btn-sm" style="background: #e2e8f0; color: #64748b; cursor: not-allowed; display: flex; align-items: center; gap: 0.35rem; font-weight: 600;" disabled>
+                                <span class="material-symbols-outlined" style="font-size: 18px;">check_circle</span> Tagihan Lunas
                             </button>
-                        ` : ''}
+                        `}
                     </div>
                 </div>
-                <div class="table-responsive">
-                    <table class="table" style="margin:0">
+                <div class="table-responsive" style="margin: 0;">
+                    <table class="table" style="margin-bottom: 0;">
                         <thead>
-                            <tr>
-                                <th>Tanggal</th>
-                                <th>Keterangan</th>
-                                <th>Volume (Qty)</th>
-                                <th class="text-right">Jumlah (Rp)</th>
-                                <th style="width: 130px; text-align: center;">Aksi</th>
+                            <tr style="background: #ffffff; border-bottom: 2px solid var(--border-color);">
+                                <th style="width: 14%;">Tanggal Transaksi</th>
+                                <th style="width: 22%;">Keterangan Penjualan</th>
+                                <th style="width: 10%; text-align: right;">Volume</th>
+                                <th style="width: 14%; text-align: right;">Tagihan (Rp)</th>
+                                <th style="width: 14%; text-align: right;">Terbayar & Sisa</th>
+                                <th style="width: 14%; text-align: center;">Status Pembayaran</th>
+                                <th style="width: 12%; text-align: center;">Aksi</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${segments.length === 0 ? '<tr><td colspan="5" class="text-center text-muted" style="padding:1rem;">Tidak ada transaksi penjualan tertunda</td></tr>' : ''}
-                            ${segments.map(s => `
-                                <tr>
-                                    <td>${formatDate(s.date)}</td>
-                                    <td>
-                                        <div style="font-weight:500; color:#1e293b;">Penjualan Ritase / Batu</div>
-                                        <div style="font-size:0.75rem; color:#64748b;">Jumlah Sopir: ${s.driverCount || 1}</div>
-                                    </td>
-                                    <td><strong>${s.qty || 0}</strong> <span style="font-size:0.75rem; color:#64748b;">${buyer?.unit || 'unit'}</span></td>
-                                    <td class="text-right" style="font-weight:600; color:#1e293b;">${formatCurrency(s.amount)}</td>
-                                    <td style="text-align: center;">
-                                        <button class="btn btn-sm" style="background:var(--success); color:white; padding:0.25rem 0.65rem; font-size:0.75rem; border-radius:var(--radius-md); gap:0.25rem;" onclick="markAsLunas('${s.txId}')" title="Tandai Transaksi Lunas">
-                                            <span class="material-symbols-outlined" style="font-size:16px;">check</span> Lunas
-                                        </button>
-                                    </td>
-                                </tr>
-                            `).join('')}
- 
+                            ${filteredSegments.map(s => {
+                                const isLunas = s.status === 'Lunas';
+                                const isPartial = s.status === 'Sebagian';
+
+                                let statusBadge = '';
+                                if (isLunas) {
+                                    statusBadge = `
+                                        <span class="badge" style="background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; padding: 0.3rem 0.6rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.25rem;">
+                                            <span class="material-symbols-outlined" style="font-size: 15px;">check_circle</span> LUNAS
+                                        </span>
+                                    `;
+                                } else if (isPartial) {
+                                    statusBadge = `
+                                        <span class="badge" style="background: #fffbeb; color: #d97706; border: 1px solid #fde68a; padding: 0.3rem 0.6rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.25rem;">
+                                            <span class="material-symbols-outlined" style="font-size: 15px;">pending</span> SEBAGIAN
+                                        </span>
+                                    `;
+                                } else {
+                                    statusBadge = `
+                                        <span class="badge" style="background: #fff1f2; color: #e11d48; border: 1px solid #fecdd3; padding: 0.3rem 0.6rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.25rem;">
+                                            <span class="material-symbols-outlined" style="font-size: 15px;">schedule</span> BELUM LUNAS
+                                        </span>
+                                    `;
+                                }
+
+                                const paymentMeta = (isLunas || isPartial) && s.lastPayment ? `
+                                    <div style="font-size: 0.75rem; color: #475569; margin-top: 0.25rem; line-height: 1.25;">
+                                        <span>${formatDate(s.lastPayment.date)}</span>
+                                        ${s.lastPayment.method ? ` • <span style="font-weight:600; color:#334155;">${s.lastPayment.method}</span>` : ''}
+                                        ${s.lastPayment.note ? `<br><span style="color:#64748b; font-style:italic;">"${s.lastPayment.note}"</span>` : ''}
+                                    </div>
+                                ` : '';
+
+                                return `
+                                    <tr style="${isLunas ? 'background: #fbfdfc;' : isPartial ? 'background: #fffefb;' : ''}">
+                                        <td style="font-weight: 600; color: #1e293b;">
+                                            ${formatDate(s.date)}
+                                        </td>
+                                        <td>
+                                            <div style="font-weight: 600; color: #334155;">Penjualan Ritase / Batu</div>
+                                            <div style="font-size: 0.75rem; color: #64748b;">Jumlah Sopir: ${s.driverCount}</div>
+                                        </td>
+                                        <td style="text-align: right; font-weight: 600; color: #334155;">
+                                            ${s.qty.toLocaleString('id-ID')} <small style="color: #64748b; font-weight: normal;">${buyer.unit || 'Ton'}</small>
+                                        </td>
+                                        <td style="text-align: right; font-weight: 700; color: #1e293b; font-size: 0.95rem;">
+                                            ${formatCurrency(s.amount)}
+                                        </td>
+                                        <td style="text-align: right; font-size: 0.85rem;">
+                                            <div style="color: #16a34a; font-weight: 700;">${formatCurrency(s.paidAmount)}</div>
+                                            <div style="color: ${s.remainingAmount > 0 ? '#dc2626' : '#64748b'}; font-weight: ${s.remainingAmount > 0 ? '700' : 'normal'}; font-size: 0.8rem;">
+                                                ${s.remainingAmount > 0 ? `Kurang: ${formatCurrency(s.remainingAmount)}` : 'Sisa: Rp 0'}
+                                            </div>
+                                        </td>
+                                        <td style="text-align: center;">
+                                            ${statusBadge}
+                                            ${paymentMeta}
+                                        </td>
+                                        <td style="text-align: center;">
+                                            ${isLunas ? `
+                                                <div style="display: flex; gap: 0.25rem; justify-content: center; flex-wrap: wrap;">
+                                                    <button class="btn btn-sm" style="background:#f1f5f9; color:#334155; padding:0.25rem 0.5rem; font-size:0.75rem;" onclick="openPaymentHistoryModal('${s.txId}', '${buyerId}')" title="Lihat Rincian & Riwayat Pembayaran">
+                                                        <span class="material-symbols-outlined" style="font-size:15px;">receipt_long</span> Rincian
+                                                    </button>
+                                                    <button class="btn btn-sm btn-danger" style="padding:0.25rem 0.45rem; font-size:0.75rem;" onclick="cancelPayment('${s.txId}')" title="Batalkan Pelunasan">
+                                                        <span class="material-symbols-outlined" style="font-size:15px;">undo</span>
+                                                    </button>
+                                                </div>
+                                            ` : isPartial ? `
+                                                <div style="display: flex; gap: 0.25rem; justify-content: center; flex-wrap: wrap;">
+                                                    <button class="btn btn-sm" style="background:#f59e0b; color:white; padding:0.25rem 0.6rem; font-size:0.75rem; font-weight:600;" onclick="openPaymentModal('${s.txId}', '${buyerId}')" title="Bayar Cicilan Sisa Tagihan">
+                                                        <span class="material-symbols-outlined" style="font-size:15px;">add_card</span> Cicil
+                                                    </button>
+                                                    <button class="btn btn-sm" style="background:#e2e8f0; color:#334155; padding:0.25rem 0.45rem; font-size:0.75rem;" onclick="openPaymentHistoryModal('${s.txId}', '${buyerId}')" title="Lihat Riwayat Cicilan">
+                                                        <span class="material-symbols-outlined" style="font-size:15px;">history</span> (${(s.payments || []).length})
+                                                    </button>
+                                                </div>
+                                            ` : `
+                                                <button class="btn btn-sm" style="background:#10b981; color:white; padding:0.3rem 0.75rem; font-size:0.75rem; border-radius:var(--radius-md); font-weight:600;" onclick="openPaymentModal('${s.txId}', '${buyerId}')" title="Buka Form Pembayaran">
+                                                    <span class="material-symbols-outlined" style="font-size:16px;">payments</span> Bayar
+                                                </button>
+                                            `}
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
                         </tbody>
                         <tfoot>
                             <tr style="background:#f8fafc; font-weight:700; border-top:2px solid var(--border-color);">
-                                <td colspan="3" style="text-align:right; color:#475569; font-size:0.85rem;">TOTAL PIUTANG BERSIH (${bName}):</td>
-                                <td class="text-right" style="color:var(--danger); font-size:1.05rem;">${formatCurrency(totalFinalTagihan)}</td>
-                                <td></td>
+                                <td colspan="3" style="text-align:right; color:#475569; font-size:0.85rem;">TOTAL KESELURUHAN (${bName}):</td>
+                                <td style="text-align:right; font-size:1.05rem; color:#1e293b;">${formatCurrency(buyerTotalAll)}</td>
+                                <td style="text-align:right; font-size:0.85rem;">
+                                    <div style="color:#16a34a;">Lunas: ${formatCurrency(buyerTotalPaid)}</div>
+                                    <div style="color:#dc2626;">Piutang: ${formatCurrency(buyerTotalUnpaid)}</div>
+                                </td>
+                                <td colspan="2" style="text-align:center; font-size:0.8rem; color:#64748b;">
+                                    ${buyerTotalUnpaid === 0 ? '<span style="color:#16a34a; font-weight:bold;">SEMUA TRANSAKSI LUNAS</span>' : `<span style="color:#dc2626; font-weight:bold;">${buyerUnpaidCount} TRANSAKSI BELUM LUNAS</span>`}
+                                </td>
                             </tr>
                         </tfoot>
                     </table>
@@ -3467,59 +3697,839 @@ window.render_penagihan = () => {
         `;
     }
 
+    if (renderedBuyerCards === 0) {
+        html += `
+            <div style="text-align:center; padding:3.5rem 1.5rem; background:#f8fafc; border-radius:var(--radius-lg); border:1px dashed var(--border-color);">
+                <span class="material-symbols-outlined" style="font-size: 48px; color: #10b981; margin-bottom: 0.5rem; display: inline-block;">task_alt</span>
+                <h3 style="font-size: 1.1rem; color: #1e293b; margin-bottom: 0.25rem;">Tidak Ada Data Penagihan yang Sesuai Filter</h3>
+                <p style="color: #64748b; font-size: 0.875rem; margin: 0;">Silakan ubah filter status atau rentang tanggal untuk melihat transaksi lainnya.</p>
+            </div>
+        `;
+    }
+
     container.innerHTML = html;
 };
 
-window.markAsLunas = (txId) => {
-    if (confirm('Apakah Anda yakin transaksi ini sudah dilunasi?')) {
-        const data = getData();
-        const tx = data.transactions.find(t => t.id === txId);
-        if (tx) {
-            tx.status = 'Lunas';
-            tx.paidAt = new Date().toISOString();
-            saveData(data, 'transactions', {
-                id: tx.id,
-                status: 'Lunas'
-            });
-            showToast('Transaksi berhasil ditandai LUNAS!');
-            render_penagihan();
-        }
-    }
-};
-
-window.markAllAsLunasForBuyer = (buyerId) => {
+// --- Modal Pembayaran Tunggal / Cicilan Transaksi ---
+window.openPaymentModal = (txId, buyerId) => {
     const data = getData();
-    const buyer = (data.buyers || []).find(b => b.id === buyerId);
-    const buyerName = buyer ? buyer.name : 'pembeli ini';
-
-    // Find all unpaid transactions containing sales for this buyer
-    const unpaidTxs = (data.transactions || []).filter(t => {
-        if (t.status === 'Lunas') return false;
-        if (t.sales && t.sales.some(s => s.buyerId === buyerId)) return true;
-        if (t.buyerId === buyerId) return true;
-        return false;
-    });
-
-    if (unpaidTxs.length === 0) {
-        alert('Tidak ada transaksi belum lunas untuk ' + buyerName);
+    const tx = (data.transactions || []).find(t => t.id === txId);
+    if (!tx) {
+        alert('Transaksi tidak ditemukan!');
         return;
     }
 
-    if (confirm(`Apakah Anda yakin ingin menandai SEMUA (${unpaidTxs.length}) transaksi untuk ${buyerName} sebagai LUNAS?`)) {
-        const now = new Date().toISOString();
-        unpaidTxs.forEach(tx => {
-            tx.status = 'Lunas';
-            tx.paidAt = now;
-            saveData(data, 'transactions', {
-                id: tx.id,
-                status: 'Lunas'
-            });
+    const buyer = (data.buyers || []).find(b => b.id === (buyerId || tx.buyerId));
+    const buyerName = buyer ? buyer.name : 'Pembeli';
+    const payInfo = getTransactionPaymentInfo(tx, buyerId);
+
+    const today = new Date().toISOString().split('T')[0];
+    const defaultPayAmount = payInfo.remaining;
+
+    const formHtml = `
+        <form id="form-pembayaran-tagihan" autocomplete="off">
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 0.85rem 1.1rem; margin-bottom: 1.25rem;">
+                <div style="font-weight: 700; color: #166534; font-size: 0.95rem; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.4rem;">
+                    <span class="material-symbols-outlined" style="font-size: 20px;">receipt_long</span>
+                    Rincian Tagihan Penjualan
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.85rem; color: #374151;">
+                    <div><strong>Pembeli:</strong> ${buyerName}</div>
+                    <div><strong>Tanggal Transaksi:</strong> ${formatDate(tx.date)}</div>
+                    <div><strong>Total Tagihan:</strong> <span style="font-weight: 700;">${formatCurrency(payInfo.total)}</span></div>
+                    <div><strong>Sudah Terbayar:</strong> <span style="color: #16a34a; font-weight: 700;">${formatCurrency(payInfo.paid)}</span></div>
+                    <div style="grid-column: span 2; border-top: 1px dashed #bbf7d0; padding-top: 0.4rem; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: 600;">Sisa Tagihan yang Harus Dibayar:</span>
+                        <span style="color: #dc2626; font-weight: 800; font-size: 1.1rem;">${formatCurrency(payInfo.remaining)}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                    <label style="margin:0;">Nominal yang Dibayar Sekarang (Rp) <span style="color:var(--danger)">*</span></label>
+                    <button type="button" class="btn btn-sm" style="background:#e0e7ff; color:#4338ca; padding:0.15rem 0.5rem; font-size:0.75rem; font-weight:600;" onclick="document.getElementById('bayar-amount').value = ${defaultPayAmount}; document.getElementById('bayar-amount').dispatchEvent(new Event('input'));">
+                        Bayar Penuh (${formatCurrency(defaultPayAmount)})
+                    </button>
+                </div>
+                <input type="number" id="bayar-amount" class="form-control" value="${defaultPayAmount}" min="1" max="${payInfo.remaining}" step="any" required style="font-size: 1.1rem; font-weight: 700; color: #0f172a;">
+                <div id="bayar-sim-info" style="font-size: 0.8rem; color: #64748b; margin-top: 0.35rem; font-weight: 500;"></div>
+            </div>
+
+            <div class="form-group">
+                <label>Tanggal Pembayaran <span style="color:var(--danger)">*</span></label>
+                <input type="date" id="bayar-date" class="form-control" value="${today}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Metode Pembayaran <span style="color:var(--danger)">*</span></label>
+                <select id="bayar-method" class="form-control" required>
+                    <option value="Tunai / Cash" selected>Tunai / Cash</option>
+                    <option value="Transfer Bank BCA">Transfer Bank BCA</option>
+                    <option value="Transfer Bank BRI">Transfer Bank BRI</option>
+                    <option value="Transfer Bank Mandiri">Transfer Bank Mandiri</option>
+                    <option value="Transfer Bank Lainnya">Transfer Bank Lainnya</option>
+                    <option value="Cek / Giro">Cek / Giro</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Keterangan / Catatan Pembayaran</label>
+                <input type="text" id="bayar-note" class="form-control" placeholder="Contoh: Transfer via Rekening BCA / Cicilan Tahap 1" oninput="this.value = this.value.toUpperCase()">
+            </div>
+
+            <div class="form-actions" style="margin-top: 1.5rem;">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary" style="background: #10b981; color: white;">
+                    <span class="material-symbols-outlined">save</span> Simpan Pembayaran
+                </button>
+            </div>
+        </form>
+    `;
+
+    openModal('Form Pembayaran / Cicilan Tagihan', formHtml, '600px');
+
+    const amountInput = document.getElementById('bayar-amount');
+    const simInfoEl = document.getElementById('bayar-sim-info');
+
+    const updateSimInfo = () => {
+        const inputVal = parseFloat(amountInput.value) || 0;
+        const remainingAfter = Math.max(0, payInfo.remaining - inputVal);
+        if (remainingAfter <= 0.01) {
+            simInfoEl.innerHTML = `<span style="color: #059669; font-weight: 700;">✓ Status Akhir: LUNAS PENUH (Sisa: Rp 0)</span>`;
+        } else {
+            simInfoEl.innerHTML = `<span style="color: #d97706; font-weight: 700;">⏳ Status Akhir: DIBAYAR SEBAGIAN (Sisa Kurang: ${formatCurrency(remainingAfter)})</span>`;
+        }
+    };
+    amountInput.addEventListener('input', updateSimInfo);
+    updateSimInfo();
+
+    document.getElementById('form-pembayaran-tagihan').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payAmount = parseFloat(document.getElementById('bayar-amount').value) || 0;
+        const payDate = document.getElementById('bayar-date').value;
+        const payMethod = document.getElementById('bayar-method').value;
+        const payNote = document.getElementById('bayar-note').value.trim();
+
+        if (payAmount <= 0) {
+            alert('Nominal pembayaran harus lebih besar dari Rp 0!');
+            return;
+        }
+
+        if (!payDate) {
+            alert('Tanggal pembayaran wajib diisi!');
+            return;
+        }
+
+        const currentData = getData();
+        const targetTx = currentData.transactions.find(t => t.id === txId);
+        if (targetTx) {
+            const currentPayments = Array.isArray(targetTx.payments) 
+                ? [...targetTx.payments] 
+                : (typeof targetTx.payments === 'string' && targetTx.payments.trim() ? JSON.parse(targetTx.payments) : []);
+
+            const newPaymentEntry = {
+                id: 'PAY-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+                date: payDate,
+                amount: payAmount,
+                method: payMethod,
+                note: payNote,
+                createdAt: new Date().toISOString()
+            };
+
+            currentPayments.push(newPaymentEntry);
+            const newTotalPaid = currentPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0);
+            const totalTxAmount = parseFloat(targetTx.totalAmount) || 0;
+            const newStatus = (newTotalPaid >= totalTxAmount - 0.5) ? 'Lunas' : 'Sebagian';
+
+            targetTx.payments = currentPayments;
+            targetTx.paidAmount = newTotalPaid;
+            targetTx.status = newStatus;
+            targetTx.paidAt = payDate;
+            targetTx.paymentMethod = payMethod;
+            targetTx.paymentNote = payNote;
+
+            const supabaseItem = {
+                id: targetTx.id,
+                date: targetTx.date,
+                buyerid: targetTx.buyerId,
+                driverid: targetTx.driverId,
+                totalamount: targetTx.totalAmount,
+                operationalexpense: targetTx.operationalExpense,
+                retributionexpense: targetTx.retributionExpense,
+                status: newStatus,
+                paid_amount: newTotalPaid,
+                paid_at: payDate,
+                payment_method: payMethod,
+                payment_note: payNote,
+                payments: JSON.stringify(currentPayments),
+                sales: targetTx.sales,
+                expenses: targetTx.expenseDetails
+            };
+
+            await saveData(currentData, 'transactions', supabaseItem);
+            closeModal();
+            render_penagihan();
+            showToast(`✅ Pembayaran Rp ${payAmount.toLocaleString('id-ID')} berhasil dicatat. Status: ${newStatus.toUpperCase()}!`);
+        }
+    });
+};
+
+// --- Modal Alokasi Pembayaran Massal / FIFO Otomatis untuk Pembeli ---
+window.openBulkPaymentAllocationModal = (buyerId) => {
+    const data = getData();
+    const buyer = (data.buyers || []).find(b => b.id === buyerId);
+    const buyerName = buyer ? buyer.name : 'Pembeli ini';
+
+    // 1. Ambil nilai filter rentang tanggal aktif dari halaman Penagihan jika sudah diinput sebelumnya
+    const startFilterEl = document.getElementById('filter-penagihan-start');
+    const endFilterEl = document.getElementById('filter-penagihan-end');
+    let curFilterStart = startFilterEl ? startFilterEl.value : '';
+    let curFilterEnd = endFilterEl ? endFilterEl.value : '';
+
+    // Helper untuk mengambil transaksi belum lunas berdasarkan rentang tanggal
+    const getCandidates = (sDate, eDate) => {
+        const list = [];
+        (data.transactions || []).forEach(t => {
+            if (sDate && t.date < sDate) return;
+            if (eDate && t.date > eDate) return;
+
+            let txSales = [];
+            if (Array.isArray(t.sales)) {
+                txSales = t.sales;
+            } else if (typeof t.sales === 'string' && t.sales.trim()) {
+                try { txSales = JSON.parse(t.sales); } catch(e){}
+            }
+
+            let isBuyerMatch = false;
+            let buyerQty = 0;
+            let driverCount = 1;
+
+            if (txSales && txSales.length > 0) {
+                const matches = txSales.filter(s => (s.buyerId || t.buyerId || t.buyerid) === buyerId);
+                if (matches.length > 0) {
+                    isBuyerMatch = true;
+                    buyerQty = matches.reduce((sum, s) => sum + (parseFloat(s.qty) || 0), 0);
+                    driverCount = matches[0]?.driverCount || 1;
+                }
+            } else if (t.buyerId === buyerId || t.buyerid === buyerId) {
+                isBuyerMatch = true;
+                buyerQty = parseFloat(t.qty) || 0;
+                driverCount = 1;
+            }
+
+            if (isBuyerMatch) {
+                const info = getTransactionPaymentInfo(t, buyerId);
+                if (info.remaining > 0) {
+                    list.push({
+                        tx: t,
+                        info: info,
+                        qty: buyerQty,
+                        driverCount: driverCount
+                    });
+                }
+            }
         });
-        showToast(`Semua transaksi untuk ${buyerName} berhasil dilunasi!`);
+
+        // Urutkan transaksi tertua terlebih dahulu (FIFO)
+        list.sort((a, b) => (a.tx.date || '').localeCompare(b.tx.date || ''));
+        return list;
+    };
+
+    let candidateTxs = getCandidates(curFilterStart, curFilterEnd);
+    let totalOutstanding = candidateTxs.reduce((sum, item) => sum + item.info.remaining, 0);
+    const today = new Date().toISOString().split('T')[0];
+
+    const formHtml = `
+        <form id="form-bulk-allocation" autocomplete="off" style="font-size: 0.9rem;">
+            <!-- Header Info & Filter Rentang Tanggal -->
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem;">
+                    <div>
+                        <div style="font-weight: 800; color: #166534; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
+                            <span class="material-symbols-outlined" style="font-size: 22px; color: #16a34a;">account_balance_wallet</span>
+                            Catat Pembayaran Masuk (FIFO / Cicilan)
+                        </div>
+                        <div style="font-size: 0.85rem; color: #374151; margin-top: 0.2rem;">
+                            Pembeli: <strong style="font-size: 0.95rem; color: #1e293b;">${buyerName}</strong> • Sisa Piutang Periode Ini: <strong id="bulk-header-outstanding" style="color:#dc2626; font-size:1.15rem; font-weight:800;">${formatCurrency(totalOutstanding)}</strong> (<span id="bulk-header-count" style="font-weight:700;">${candidateTxs.length}</span> Transaksi Belum Lunas)
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Rentang Tanggal Filter Bar di dalam Modal -->
+                <div style="background: white; border: 1px solid #dcfce7; border-radius: 8px; padding: 0.5rem 0.85rem; display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; font-size: 0.85rem;">
+                    <label style="font-weight: 700; color: #166534; margin: 0; display: flex; align-items: center; gap: 0.3rem;">
+                        <span class="material-symbols-outlined" style="font-size: 18px; color: #16a34a;">date_range</span>
+                        Rentang Transaksi:
+                    </label>
+                    <input type="date" id="bulk-filter-start" class="form-control" style="width: auto; padding: 0.25rem 0.5rem; font-size: 0.85rem;" value="${curFilterStart}" onchange="window.updateBulkCandidateList()">
+                    <span style="color: #64748b; font-weight: bold;">s/d</span>
+                    <input type="date" id="bulk-filter-end" class="form-control" style="width: auto; padding: 0.25rem 0.5rem; font-size: 0.85rem;" value="${curFilterEnd}" onchange="window.updateBulkCandidateList()">
+                    <button type="button" class="btn btn-sm" style="background: #10b981; color: white; padding: 0.3rem 0.65rem; font-size: 0.8rem; font-weight: 600;" onclick="window.updateBulkCandidateList()">
+                        Terapkan Rentang
+                    </button>
+                    <button type="button" class="btn btn-sm" style="background: #e2e8f0; color: #475569; padding: 0.3rem 0.65rem; font-size: 0.8rem;" onclick="document.getElementById('bulk-filter-start').value=''; document.getElementById('bulk-filter-end').value=''; window.updateBulkCandidateList();" title="Tampilkan seluruh transaksi belum lunas tanpa filter tanggal">
+                        Semua Tanggal
+                    </button>
+                </div>
+            </div>
+
+            <!-- Input Utama Pembayaran (2 Kolom Grid) -->
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.25rem; margin-bottom: 1rem;">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                        <label style="margin:0; font-weight: 700; color: #1e293b;">Nominal Pembayaran Masuk (Rp) <span style="color:var(--danger)">*</span></label>
+                        <button type="button" id="btn-pay-all-bulk" class="btn btn-sm" style="background:#e0e7ff; color:#4338ca; padding:0.15rem 0.55rem; font-size:0.75rem; font-weight:700; border-radius: 4px;" onclick="window.setBulkPayAll()">
+                            Bayar Sesuai Total (${formatCurrency(totalOutstanding)})
+                        </button>
+                    </div>
+                    <input type="number" id="bulk-total-pay" class="form-control" value="${totalOutstanding}" min="1" step="any" required style="font-size: 1.25rem; font-weight: 800; color: #0f172a; border: 2px solid #6366f1; background: #f8faff; padding: 0.5rem 0.75rem;">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label style="font-weight: 700; color: #1e293b; margin-bottom: 0.35rem;">Tanggal Pembayaran <span style="color:var(--danger)">*</span></label>
+                    <input type="date" id="bulk-pay-date" class="form-control" value="${today}" required style="padding: 0.55rem 0.75rem;">
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: 1.25rem; margin-bottom: 1.25rem;">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label style="font-weight: 600; color: #334155; margin-bottom: 0.35rem;">Metode Pembayaran <span style="color:var(--danger)">*</span></label>
+                    <select id="bulk-pay-method" class="form-control" required style="padding: 0.55rem 0.75rem;">
+                        <option value="Tunai / Cash" selected>Tunai / Cash</option>
+                        <option value="Transfer Bank BCA">Transfer Bank BCA</option>
+                        <option value="Transfer Bank BRI">Transfer Bank BRI</option>
+                        <option value="Transfer Bank Mandiri">Transfer Bank Mandiri</option>
+                        <option value="Transfer Bank Lainnya">Transfer Bank Lainnya</option>
+                        <option value="Cek / Giro">Cek / Giro</option>
+                    </select>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label style="font-weight: 600; color: #334155; margin-bottom: 0.35rem;">Catatan / No. Bukti Pembayaran</label>
+                    <input type="text" id="bulk-pay-note" class="form-control" placeholder="Contoh: Transfer BCA a.n CV RESEP / Pelunasan Periode Ini" oninput="this.value = this.value.toUpperCase()" style="padding: 0.55rem 0.75rem;">
+                </div>
+            </div>
+
+            <!-- Simulasi Alokasi Header -->
+            <div style="margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-size: 0.875rem; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 0.35rem;">
+                    <span class="material-symbols-outlined" style="font-size: 18px; color: #4f46e5;">format_list_bulleted</span>
+                    Rincian Alokasi Per Transaksi (FIFO Otomatis):
+                </div>
+                <div style="font-size: 0.75rem; color: #64748b;">
+                    *Nominal alokasi per baris dapat disesuaikan langsung jika diperlukan
+                </div>
+            </div>
+
+            <!-- Tabel Transaksi Lebar -->
+            <div style="max-height: 320px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 1.25rem; background: white; box-shadow: inset 0 1px 2px rgba(0,0,0,0.03);">
+                <table class="table" style="margin: 0; font-size: 0.85rem; width: 100%;">
+                    <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 2; border-bottom: 2px solid var(--border-color);">
+                        <tr>
+                            <th style="width: 40px; text-align: center;"><input type="checkbox" id="check-all-alloc" checked onchange="window.toggleAllAllocChecks(this)"></th>
+                            <th style="width: 130px;">Tgl Transaksi</th>
+                            <th style="width: 130px; text-align: center;">Volume / Qty</th>
+                            <th style="text-align: right; width: 140px;">Total Tagihan</th>
+                            <th style="text-align: right; width: 140px;">Sisa Piutang</th>
+                            <th style="text-align: right; width: 180px;">Alokasi Bayar (Rp)</th>
+                            <th style="text-align: center; width: 160px;">Status Baru</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bulk-alloc-tbody">
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Live Allocation Summary Footer -->
+            <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; font-size: 0.875rem;">
+                <div>
+                    Total Uang Masuk: <strong id="summary-total-in" style="color: #0f172a; font-size: 1rem;">${formatCurrency(totalOutstanding)}</strong> • 
+                    Teralokasi: <strong id="summary-total-used" style="color: #16a34a; font-size: 1rem;">Rp 0</strong>
+                </div>
+                <div id="summary-diff-container">
+                    <span id="summary-diff-badge" class="badge" style="background: #ecfdf5; color: #059669; font-weight: 700; padding: 0.4rem 0.8rem; font-size: 0.8rem;">
+                        Alokasi Pas (Sisa Rp 0)
+                    </span>
+                </div>
+            </div>
+
+            <div class="form-actions" style="margin-top: 1rem; padding-top: 1rem;">
+                <button type="button" class="btn" style="padding: 0.6rem 1.25rem;" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary" style="background: #10b981; color: white; padding: 0.6rem 1.75rem; font-weight: 700; font-size: 0.95rem;">
+                    <span class="material-symbols-outlined">save</span> Simpan & Terapkan Pembayaran
+                </button>
+            </div>
+        </form>
+    `;
+
+    openModal(`Catat Pembayaran Masuk - ${buyerName}`, formHtml, '950px');
+
+    // Helper render baris tabel transaksi
+    const renderTableRows = (txList) => {
+        const tbody = document.getElementById('bulk-alloc-tbody');
+        if (!tbody) return;
+
+        if (txList.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="text-center text-muted" style="padding: 2.5rem 1rem;">
+                        <span class="material-symbols-outlined" style="font-size: 32px; color: #94a3b8; display: block; margin-bottom: 0.5rem;">event_busy</span>
+                        <strong style="color: #475569;">Tidak ada transaksi piutang yang ditemukan pada rentang tanggal ini.</strong>
+                        <div style="font-size: 0.8rem; margin-top: 0.35rem; color: #64748b;">Silakan sesuaikan filter tanggal atau klik tombol <em>"Semua Tanggal"</em> di atas.</div>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        tbody.innerHTML = txList.map(item => {
+            const unitStr = buyer.unit || 'Ton';
+            return `
+                <tr id="row-alloc-${item.tx.id}" data-tx-id="${item.tx.id}" data-max-remaining="${item.info.remaining}">
+                    <td style="text-align: center;">
+                        <input type="checkbox" class="alloc-row-check" data-tx-id="${item.tx.id}" checked onchange="window.recalculateBulkAllocations()">
+                    </td>
+                    <td style="font-weight: 600; color: #1e293b;">
+                        ${formatDate(item.tx.date)}
+                    </td>
+                    <td style="text-align: center; color: #475569;">
+                        ${item.qty ? `${item.qty.toLocaleString('id-ID')} ${unitStr}` : '-'}
+                        ${item.driverCount > 1 ? `<small style="display:block; color:#64748b;">(${item.driverCount} Sopir)</small>` : ''}
+                    </td>
+                    <td style="text-align: right; color: #475569;">
+                        ${formatCurrency(item.info.total)}
+                    </td>
+                    <td style="text-align: right; font-weight: 700; color: #dc2626;">
+                        ${formatCurrency(item.info.remaining)}
+                    </td>
+                    <td style="text-align: right;">
+                        <input type="number" class="form-control form-control-sm alloc-row-input" data-tx-id="${item.tx.id}" data-max="${item.info.remaining}" value="0" min="0" max="${item.info.remaining}" step="any" style="text-align: right; font-weight: 700; color: #0f172a; padding: 0.3rem 0.5rem; border-color: #cbd5e1;" oninput="window.handleManualAllocInput('${item.tx.id}')">
+                    </td>
+                    <td style="text-align: center;" id="status-cell-${item.tx.id}">
+                        <span class="badge" style="background:#fff1f2; color:#e11d48;">BELUM LUNAS</span>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    };
+
+    // Fungsi pembaruan saat filter rentang tanggal diubah dalam modal
+    window.updateBulkCandidateList = () => {
+        const sDate = document.getElementById('bulk-filter-start')?.value || '';
+        const eDate = document.getElementById('bulk-filter-end')?.value || '';
+        candidateTxs = getCandidates(sDate, eDate);
+        totalOutstanding = candidateTxs.reduce((sum, item) => sum + item.info.remaining, 0);
+
+        const outEl = document.getElementById('bulk-header-outstanding');
+        const countEl = document.getElementById('bulk-header-count');
+        const payAllBtn = document.getElementById('btn-pay-all-bulk');
+        const payInput = document.getElementById('bulk-total-pay');
+
+        if (outEl) outEl.textContent = formatCurrency(totalOutstanding);
+        if (countEl) countEl.textContent = candidateTxs.length;
+        if (payAllBtn) payAllBtn.textContent = `Bayar Sesuai Total (${formatCurrency(totalOutstanding)})`;
+        if (payInput) payInput.value = totalOutstanding;
+
+        renderTableRows(candidateTxs);
+        window.recalculateBulkAllocations();
+    };
+
+    window.setBulkPayAll = () => {
+        const payInput = document.getElementById('bulk-total-pay');
+        if (payInput) {
+            payInput.value = totalOutstanding;
+            window.recalculateBulkAllocations();
+        }
+    };
+
+    // Inisialisasi baris tabel pertama kali
+    renderTableRows(candidateTxs);
+
+    window.toggleAllAllocChecks = (masterCheck) => {
+        const checks = document.querySelectorAll('.alloc-row-check');
+        checks.forEach(c => c.checked = masterCheck.checked);
+        window.recalculateBulkAllocations();
+    };
+
+    window.recalculateBulkAllocations = () => {
+        const totalPayInput = document.getElementById('bulk-total-pay');
+        if (!totalPayInput) return;
+
+        let availableMoney = parseFloat(totalPayInput.value) || 0;
+        const totalIn = availableMoney;
+        let totalUsed = 0;
+
+        const rowChecks = document.querySelectorAll('.alloc-row-check');
+        rowChecks.forEach(chk => {
+            const txId = chk.dataset.txId;
+            const inputEl = document.querySelector(`.alloc-row-input[data-tx-id="${txId}"]`);
+            if (!inputEl) return;
+            const maxRemaining = parseFloat(inputEl.dataset.max) || 0;
+            const statusCell = document.getElementById(`status-cell-${txId}`);
+
+            if (chk.checked && availableMoney > 0.001) {
+                let allocated = Math.min(availableMoney, maxRemaining);
+                allocated = Math.round(allocated * 100) / 100;
+                inputEl.value = allocated;
+                inputEl.disabled = false;
+                availableMoney = Math.round((availableMoney - allocated) * 100) / 100;
+                totalUsed = Math.round((totalUsed + allocated) * 100) / 100;
+
+                const remainingAfter = Math.max(0, Math.round((maxRemaining - allocated) * 100) / 100);
+                if (remainingAfter <= 0.01) {
+                    if (statusCell) statusCell.innerHTML = `<span class="badge" style="background:#ecfdf5; color:#059669; font-weight:700;">✓ LUNAS</span>`;
+                } else if (allocated > 0) {
+                    if (statusCell) statusCell.innerHTML = `<span class="badge" style="background:#fffbeb; color:#d97706; font-weight:700;">⏳ SEBAGIAN (Sisa ${formatCurrency(remainingAfter)})</span>`;
+                } else {
+                    if (statusCell) statusCell.innerHTML = `<span class="badge" style="background:#fff1f2; color:#e11d48;">BELUM LUNAS</span>`;
+                }
+            } else {
+                inputEl.value = 0;
+                inputEl.disabled = !chk.checked;
+                if (statusCell) statusCell.innerHTML = `<span class="badge" style="background:#fff1f2; color:#e11d48;">BELUM LUNAS</span>`;
+            }
+        });
+
+        // Update Summary Footer
+        const summaryInEl = document.getElementById('summary-total-in');
+        const summaryUsedEl = document.getElementById('summary-total-used');
+        if (summaryInEl) summaryInEl.textContent = formatCurrency(totalIn);
+        if (summaryUsedEl) summaryUsedEl.textContent = formatCurrency(totalUsed);
+
+        const diff = Math.round((totalIn - totalUsed) * 100) / 100;
+        const diffBadge = document.getElementById('summary-diff-badge');
+        if (diffBadge) {
+            if (Math.abs(diff) < 0.5) {
+                diffBadge.style.background = '#ecfdf5';
+                diffBadge.style.color = '#059669';
+                diffBadge.textContent = 'Alokasi Pas (Sisa Rp 0)';
+            } else if (diff > 0) {
+                diffBadge.style.background = '#fef3c7';
+                diffBadge.style.color = '#b45309';
+                diffBadge.textContent = `Ada Sisa Uang: ${formatCurrency(diff)}`;
+            } else {
+                diffBadge.style.background = '#fee2e2';
+                diffBadge.style.color = '#dc2626';
+                diffBadge.textContent = `Kekurangan Uang: ${formatCurrency(Math.abs(diff))}`;
+            }
+        }
+    };
+
+    window.handleManualAllocInput = (changedTxId) => {
+        let totalUsed = 0;
+        const rowInputs = document.querySelectorAll('.alloc-row-input');
+        rowInputs.forEach(inputEl => {
+            const txId = inputEl.dataset.txId;
+            const val = parseFloat(inputEl.value) || 0;
+            const maxRemaining = parseFloat(inputEl.dataset.max) || 0;
+            const statusCell = document.getElementById(`status-cell-${txId}`);
+
+            totalUsed = Math.round((totalUsed + val) * 100) / 100;
+            const remainingAfter = Math.max(0, Math.round((maxRemaining - val) * 100) / 100);
+
+            if (remainingAfter <= 0.01) {
+                if (statusCell) statusCell.innerHTML = `<span class="badge" style="background:#ecfdf5; color:#059669; font-weight:700;">✓ LUNAS</span>`;
+            } else if (val > 0) {
+                if (statusCell) statusCell.innerHTML = `<span class="badge" style="background:#fffbeb; color:#d97706; font-weight:700;">⏳ SEBAGIAN (Sisa ${formatCurrency(remainingAfter)})</span>`;
+            } else {
+                if (statusCell) statusCell.innerHTML = `<span class="badge" style="background:#fff1f2; color:#e11d48;">BELUM LUNAS</span>`;
+            }
+        });
+
+        const totalPayInput = document.getElementById('bulk-total-pay');
+        const totalIn = parseFloat(totalPayInput.value) || 0;
+
+        const summaryInEl = document.getElementById('summary-total-in');
+        const summaryUsedEl = document.getElementById('summary-total-used');
+        if (summaryInEl) summaryInEl.textContent = formatCurrency(totalIn);
+        if (summaryUsedEl) summaryUsedEl.textContent = formatCurrency(totalUsed);
+
+        const diff = Math.round((totalIn - totalUsed) * 100) / 100;
+        const diffBadge = document.getElementById('summary-diff-badge');
+        if (diffBadge) {
+            if (Math.abs(diff) < 0.5) {
+                diffBadge.style.background = '#ecfdf5';
+                diffBadge.style.color = '#059669';
+                diffBadge.textContent = 'Alokasi Pas (Sisa Rp 0)';
+            } else if (diff > 0) {
+                diffBadge.style.background = '#fef3c7';
+                diffBadge.style.color = '#b45309';
+                diffBadge.textContent = `Ada Sisa Uang: ${formatCurrency(diff)}`;
+            } else {
+                diffBadge.style.background = '#fee2e2';
+                diffBadge.style.color = '#dc2626';
+                diffBadge.textContent = `Alokasi Melebihi Uang Masuk (${formatCurrency(Math.abs(diff))})`;
+            }
+        }
+    };
+
+    document.getElementById('bulk-total-pay').addEventListener('input', window.recalculateBulkAllocations);
+    window.recalculateBulkAllocations();
+
+    // Form submission
+    document.getElementById('form-bulk-allocation').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payDate = document.getElementById('bulk-pay-date').value;
+        const payMethod = document.getElementById('bulk-pay-method').value;
+        const payNote = document.getElementById('bulk-pay-note').value.trim();
+
+        if (!payDate) {
+            alert('Tanggal pembayaran wajib diisi!');
+            return;
+        }
+
+        const allocationsToApply = [];
+        const rowInputs = document.querySelectorAll('.alloc-row-input');
+        rowInputs.forEach(inputEl => {
+            const txId = inputEl.dataset.txId;
+            const allocVal = parseFloat(inputEl.value) || 0;
+            if (allocVal > 0) {
+                allocationsToApply.push({ txId, amount: allocVal });
+            }
+        });
+
+        if (allocationsToApply.length === 0) {
+            alert('Belum ada nominal pembayaran yang dialokasikan ke transaksi!');
+            return;
+        }
+
+        const currentData = getData();
+        const batchCode = 'BATCH-' + Date.now();
+
+        for (const alloc of allocationsToApply) {
+            const targetTx = currentData.transactions.find(t => t.id === alloc.txId);
+            if (targetTx) {
+                const currentPayments = Array.isArray(targetTx.payments) 
+                    ? [...targetTx.payments] 
+                    : (typeof targetTx.payments === 'string' && targetTx.payments.trim() ? JSON.parse(targetTx.payments) : []);
+
+                const newPaymentEntry = {
+                    id: 'PAY-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+                    batchId: batchCode,
+                    date: payDate,
+                    amount: alloc.amount,
+                    method: payMethod,
+                    note: payNote ? payNote : 'Alokasi Pembayaran Masuk (FIFO)',
+                    createdAt: new Date().toISOString()
+                };
+
+                currentPayments.push(newPaymentEntry);
+                const newTotalPaid = currentPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0);
+                const totalTxAmount = parseFloat(targetTx.totalAmount || targetTx.totalamount) || 0;
+                const newStatus = (newTotalPaid >= totalTxAmount - 0.5) ? 'Lunas' : 'Sebagian';
+
+                targetTx.payments = currentPayments;
+                targetTx.paidAmount = newTotalPaid;
+                targetTx.status = newStatus;
+                targetTx.paidAt = payDate;
+                targetTx.paymentMethod = payMethod;
+                targetTx.paymentNote = payNote;
+
+                const supabaseItem = {
+                    id: targetTx.id,
+                    date: targetTx.date,
+                    buyerid: targetTx.buyerId || targetTx.buyerid,
+                    driverid: targetTx.driverId || targetTx.driverid,
+                    totalamount: targetTx.totalAmount || targetTx.totalamount,
+                    operationalexpense: targetTx.operationalExpense || targetTx.operationalexpense,
+                    retributionexpense: targetTx.retributionExpense || targetTx.retributionexpense,
+                    status: newStatus,
+                    paid_amount: newTotalPaid,
+                    paid_at: payDate,
+                    payment_method: payMethod,
+                    payment_note: payNote,
+                    payments: JSON.stringify(currentPayments),
+                    sales: targetTx.sales,
+                    expenses: targetTx.expenseDetails || targetTx.expenses
+                };
+
+                await saveData(currentData, 'transactions', supabaseItem);
+            }
+        }
+
+        closeModal();
         render_penagihan();
+        showToast(`✅ Berhasil mencatat pembayaran untuk ${allocationsToApply.length} transaksi ${buyerName}!`);
+    });
+};
+
+// --- Modal Riwayat Pembayaran & Edit / Hapus Cicilan ---
+window.openPaymentHistoryModal = (txId, buyerId) => {
+    const data = getData();
+    const tx = (data.transactions || []).find(t => t.id === txId);
+    if (!tx) return;
+
+    const buyer = (data.buyers || []).find(b => b.id === (buyerId || tx.buyerId));
+    const buyerName = buyer ? buyer.name : 'Pembeli';
+    const payInfo = getTransactionPaymentInfo(tx, buyerId);
+
+    const historyHtml = `
+        <div style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.85rem 1.1rem; margin-bottom: 1.25rem;">
+            <div style="font-weight: 700; color: #0f172a; font-size: 0.95rem; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.4rem;">
+                <span class="material-symbols-outlined" style="font-size: 20px; color: var(--primary-color);">history</span>
+                Riwayat Pembayaran Transaksi
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.85rem; color: #374151;">
+                <div><strong>Pembeli:</strong> ${buyerName}</div>
+                <div><strong>Tanggal Transaksi:</strong> ${formatDate(tx.date)}</div>
+                <div><strong>Total Tagihan:</strong> ${formatCurrency(payInfo.total)}</div>
+                <div><strong>Total Terbayar:</strong> <span style="color: #16a34a; font-weight: 700;">${formatCurrency(payInfo.paid)}</span></div>
+                <div><strong>Sisa Piutang:</strong> <span style="color: ${payInfo.remaining > 0 ? '#dc2626' : '#16a34a'}; font-weight: 700;">${formatCurrency(payInfo.remaining)}</span></div>
+                <div><strong>Status:</strong> ${payInfo.status === 'Lunas' ? '<span class="badge" style="background:#ecfdf5; color:#059669; font-weight:bold;">LUNAS</span>' : payInfo.status === 'Sebagian' ? '<span class="badge" style="background:#fffbeb; color:#d97706; font-weight:bold;">SEBAGIAN</span>' : '<span class="badge" style="background:#fff1f2; color:#e11d48; font-weight:bold;">BELUM LUNAS</span>'}</div>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center;">
+            <h4 style="margin: 0; font-size: 0.9rem; color: #1e293b;">Rincian Pembayaran Masuk:</h4>
+            ${payInfo.remaining > 0 ? `
+                <button class="btn btn-sm" style="background: #10b981; color: white; padding: 0.25rem 0.6rem; font-size: 0.75rem;" onclick="closeModal(); openPaymentModal('${txId}', '${buyerId}')">
+                    + Tambah Pembayaran / Cicilan
+                </button>
+            ` : ''}
+        </div>
+
+        <div style="max-height: 250px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 1.5rem;">
+            <table class="table" style="margin: 0; font-size: 0.85rem;">
+                <thead style="background: #f1f5f9; position: sticky; top: 0;">
+                    <tr>
+                        <th style="width: 30px; text-align: center;">No</th>
+                        <th>Tanggal Bayar</th>
+                        <th style="text-align: right;">Nominal</th>
+                        <th>Metode</th>
+                        <th>Catatan</th>
+                        <th style="width: 50px; text-align: center;">Aksi</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${payInfo.payments.length === 0 ? `
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #64748b; padding: 1.5rem;">
+                                ${tx.status === 'Lunas' ? `Pembayaran tercatat lunas (${formatDate(tx.paidAt)} via ${tx.paymentMethod || 'Tunai'})` : 'Belum ada riwayat pembayaran yang tercatat.'}
+                            </td>
+                        </tr>
+                    ` : payInfo.payments.map((p, idx) => `
+                        <tr>
+                            <td style="text-align: center;">${idx + 1}</td>
+                            <td style="font-weight: 600;">${formatDate(p.date)}</td>
+                            <td style="text-align: right; font-weight: 700; color: #16a34a;">${formatCurrency(p.amount)}</td>
+                            <td>${p.method || '-'}</td>
+                            <td style="color: #64748b; font-style: italic;">${p.note || '-'}</td>
+                            <td style="text-align: center;">
+                                <button class="btn btn-sm btn-danger" style="padding: 0.15rem 0.35rem; font-size: 0.7rem;" onclick="window.deletePaymentEntry('${txId}', '${p.id}', '${buyerId}')" title="Hapus Riwayat Cicilan Ini">
+                                    <span class="material-symbols-outlined" style="font-size: 14px;">delete</span>
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="form-actions">
+            <button type="button" class="btn btn-primary" onclick="closeModal()">Tutup</button>
+        </div>
+    `;
+
+    openModal('Rincian & Riwayat Pembayaran', historyHtml, '850px');
+};
+
+// --- Hapus Item Cicilan Spesifik ---
+window.deletePaymentEntry = async (txId, paymentId, buyerId) => {
+    if (!confirm('Apakah Anda yakin ingin menghapus catatan pembayaran ini? Saldo tagihan akan dikembalikan.')) {
+        return;
+    }
+
+    const currentData = getData();
+    const targetTx = currentData.transactions.find(t => t.id === txId);
+    if (!targetTx) return;
+
+    let currentPayments = Array.isArray(targetTx.payments) 
+        ? [...targetTx.payments] 
+        : (typeof targetTx.payments === 'string' && targetTx.payments.trim() ? JSON.parse(targetTx.payments) : []);
+
+    currentPayments = currentPayments.filter(p => p.id !== paymentId);
+
+    const newTotalPaid = currentPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0);
+    const totalTxAmount = parseFloat(targetTx.totalAmount) || 0;
+    const newStatus = (newTotalPaid >= totalTxAmount - 0.5 && totalTxAmount > 0) 
+        ? 'Lunas' 
+        : (newTotalPaid > 0 ? 'Sebagian' : 'Belum Lunas');
+
+    const lastP = currentPayments.length > 0 ? currentPayments[currentPayments.length - 1] : null;
+
+    targetTx.payments = currentPayments;
+    targetTx.paidAmount = newTotalPaid;
+    targetTx.status = newStatus;
+    targetTx.paidAt = lastP ? lastP.date : null;
+    targetTx.paymentMethod = lastP ? lastP.method : null;
+    targetTx.paymentNote = lastP ? lastP.note : null;
+
+    const supabaseItem = {
+        id: targetTx.id,
+        date: targetTx.date,
+        buyerid: targetTx.buyerId,
+        driverid: targetTx.driverId,
+        totalamount: targetTx.totalAmount,
+        operationalexpense: targetTx.operationalExpense,
+        retributionexpense: targetTx.retributionExpense,
+        status: newStatus,
+        paid_amount: newTotalPaid,
+        paid_at: targetTx.paidAt,
+        payment_method: targetTx.paymentMethod,
+        payment_note: targetTx.paymentNote,
+        payments: JSON.stringify(currentPayments),
+        sales: targetTx.sales,
+        expenses: targetTx.expenseDetails
+    };
+
+    await saveData(currentData, 'transactions', supabaseItem);
+    render_penagihan();
+    openPaymentHistoryModal(txId, buyerId);
+    showToast('Catatan pembayaran berhasil dihapus.');
+};
+
+// --- Batalkan Semua Pembayaran Transaksi (Reset to Belum Lunas) ---
+window.cancelPayment = async (txId) => {
+    if (!confirm('Apakah Anda yakin ingin membatalkan seluruh pembayaran transaksi ini dan mengembalikannya ke BELUM LUNAS?')) {
+        return;
+    }
+
+    const currentData = getData();
+    const targetTx = currentData.transactions.find(t => t.id === txId);
+    if (targetTx) {
+        targetTx.status = 'Belum Lunas';
+        targetTx.paidAmount = 0;
+        targetTx.paidAt = null;
+        targetTx.paymentMethod = null;
+        targetTx.paymentNote = null;
+        targetTx.payments = [];
+
+        const supabaseItem = {
+            id: targetTx.id,
+            date: targetTx.date,
+            buyerid: targetTx.buyerId,
+            driverid: targetTx.driverId,
+            totalamount: targetTx.totalAmount,
+            operationalexpense: targetTx.operationalExpense,
+            retributionexpense: targetTx.retributionExpense,
+            status: 'Belum Lunas',
+            paid_amount: 0,
+            paid_at: null,
+            payment_method: null,
+            payment_note: null,
+            payments: JSON.stringify([]),
+            sales: targetTx.sales,
+            expenses: targetTx.expenseDetails
+        };
+
+        await saveData(currentData, 'transactions', supabaseItem);
+        render_penagihan();
+        showToast('Status transaksi dikembalikan ke BELUM LUNAS');
     }
 };
 
+// --- Cetak Invoice & Rekap Piutang Terintegrasi ---
 window.printTagihan = (buyerId) => {
     const data = getData();
     const buyer = (data.buyers || []).find(b => b.id === buyerId);
@@ -3527,50 +4537,92 @@ window.printTagihan = (buyerId) => {
 
     const startEl = document.getElementById('filter-penagihan-start');
     const endEl = document.getElementById('filter-penagihan-end');
+    const statusEl = document.getElementById('filter-penagihan-status');
     const startDate = startEl ? startEl.value : '';
     const endDate = endEl ? endEl.value : '';
+    const filterStatus = statusEl ? statusEl.value : '';
 
-    // Collect buyer sales
     const segments = [];
-    (data.transactions || []).filter(t => t.status !== 'Lunas').forEach(t => {
+    (data.transactions || []).forEach(t => {
         if (startDate && t.date < startDate) return;
         if (endDate && t.date > endDate) return;
 
-        if (t.sales && t.sales.length > 0) {
-            t.sales.forEach(s => {
-                if (s.buyerId === buyerId) {
-                    segments.push({ txId: t.id, date: t.date, amount: parseFloat(s.total) || 0, qty: parseFloat(s.qty) || 0, driverCount: s.driverCount || 1 });
+        const info = getTransactionPaymentInfo(t, buyerId);
+        if (filterStatus && info.status !== filterStatus) return;
+
+        let txSales = [];
+        if (Array.isArray(t.sales)) {
+            txSales = t.sales;
+        } else if (typeof t.sales === 'string' && t.sales.trim()) {
+            try { txSales = JSON.parse(t.sales); } catch(e){}
+        }
+
+        if (txSales && txSales.length > 0) {
+            txSales.forEach(s => {
+                const bId = s.buyerId || t.buyerId || t.buyerid;
+                if (bId === buyerId) {
+                    segments.push({
+                        txId: t.id,
+                        date: t.date,
+                        amount: parseFloat(s.total) || 0,
+                        qty: parseFloat(s.qty) || 0,
+                        driverCount: s.driverCount || 1,
+                        status: info.status,
+                        paidAmount: info.paid,
+                        remainingAmount: info.remaining,
+                        paidAt: info.lastPayment?.date,
+                        paymentMethod: info.lastPayment?.method,
+                        paymentNote: info.lastPayment?.note
+                    });
                 }
             });
-        } else if (t.buyerId === buyerId) {
-            segments.push({ txId: t.id, date: t.date, amount: parseFloat(t.totalAmount) || 0, qty: parseFloat(t.qty) || 0, driverCount: 1 });
+        } else if (t.buyerId === buyerId || t.buyerid === buyerId) {
+            segments.push({
+                txId: t.id,
+                date: t.date,
+                amount: parseFloat(t.totalAmount || t.totalamount) || 0,
+                qty: parseFloat(t.qty) || 0,
+                driverCount: 1,
+                status: info.status,
+                paidAmount: info.paid,
+                remainingAmount: info.remaining,
+                paidAt: info.lastPayment?.date,
+                paymentMethod: info.lastPayment?.method,
+                paymentNote: info.lastPayment?.note
+            });
         }
     });
 
+    segments.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
     const totalSales = segments.reduce((sum, s) => sum + s.amount, 0);
-    const grandTotal = totalSales;
+    const totalPaid = segments.reduce((sum, s) => sum + s.paidAmount, 0);
+    const totalUnpaid = segments.reduce((sum, s) => sum + s.remainingAmount, 0);
 
     const periodText = (startDate || endDate) 
         ? `Periode: ${startDate ? formatDate(startDate) : '-'} s.d ${endDate ? formatDate(endDate) : '-'}` 
-        : 'Seluruh Tagihan Aktif';
+        : 'Seluruh Riwayat Transaksi';
 
     let html = `
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Cetak Tagihan - ${buyer.name}</title>
+            <title>Cetak Tagihan / Invoice - ${buyer.name}</title>
             <style>
-                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.2; padding: 20px; font-size: 14px; background: white; }
+                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.3; padding: 20px; font-size: 13px; background: white; }
                 .header { text-align: center; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
-                .header h1 { margin: 0 0 5px 0; font-size: 24px; color: #0f172a; }
+                .header h1 { margin: 0 0 5px 0; font-size: 22px; color: #0f172a; }
                 .info-table { width: 100%; margin-bottom: 15px; }
-                .info-table td { padding: 2px 0; }
+                .info-table td { padding: 3px 0; }
                 .data-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 5px 8px; text-align: left; }
+                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
                 .data-table th { background: #f8fafc; font-weight: 600; color: #475569; }
                 .text-right { text-align: right !important; }
                 .text-center { text-align: center !important; }
-                .total-row th { background: #f1f5f9; font-size: 16px; color: #0f172a; padding: 8px 10px; }
+                .badge-lunas { color: #059669; font-weight: bold; background: #ecfdf5; padding: 2px 6px; border-radius: 4px; border: 1px solid #a7f3d0; font-size: 11px; }
+                .badge-sebagian { color: #d97706; font-weight: bold; background: #fffbeb; padding: 2px 6px; border-radius: 4px; border: 1px solid #fde68a; font-size: 11px; }
+                .badge-belum { color: #e11d48; font-weight: bold; background: #fff1f2; padding: 2px 6px; border-radius: 4px; border: 1px solid #fecdd3; font-size: 11px; }
+                .total-row th { background: #f8fafc; font-size: 14px; color: #0f172a; padding: 8px 10px; }
                 @media print {
                     body { -webkit-print-color-adjust: exact; padding: 0; }
                     .no-print { display: none; }
@@ -3584,14 +4636,14 @@ window.printTagihan = (buyerId) => {
             
             <div class="header">
                 <img src="${window.location.origin}/HEADER%20RESEP.png" alt="Header CV RESEP" style="width: 100%; max-width: 800px; height: auto; display: block; margin: 0 auto 15px auto;">
-                <h1 style="font-size: 20px;">INVOICE PENAGIHAN</h1>
+                <h1 style="font-size: 20px;">INVOICE & REKAP PIUTANG</h1>
                 <p style="margin:0; color:#64748b;">${periodText}</p>
             </div>
 
             <table class="info-table">
                 <tr>
                     <td style="width: 120px; color:#64748b;">Kepada Yth.</td>
-                    <td style="font-weight: bold; font-size: 16px;">: ${buyer.name}</td>
+                    <td style="font-weight: bold; font-size: 15px;">: ${buyer.name}</td>
                 </tr>
                 <tr>
                     <td style="color:#64748b;">Alamat</td>
@@ -3606,11 +4658,14 @@ window.printTagihan = (buyerId) => {
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="width: 50px;" class="text-center">No</th>
-                        <th>Tanggal</th>
+                        <th style="width: 35px;" class="text-center">No</th>
+                        <th style="width: 15%;">Tanggal</th>
                         <th>Keterangan</th>
-                        <th class="text-center">Qty / Vol</th>
-                        <th class="text-right">Jumlah (Rp)</th>
+                        <th class="text-center" style="width: 12%;">Volume</th>
+                        <th class="text-right" style="width: 15%;">Tagihan (Rp)</th>
+                        <th class="text-right" style="width: 15%;">Terbayar (Rp)</th>
+                        <th class="text-right" style="width: 15%;">Sisa Piutang</th>
+                        <th class="text-center" style="width: 12%;">Status</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -3618,29 +4673,47 @@ window.printTagihan = (buyerId) => {
 
     let no = 1;
     if (segments.length === 0) {
-        html += `<tr><td colspan="5" class="text-center" style="padding: 20px; color:#64748b;">Tidak ada rincian tagihan</td></tr>`;
+        html += `<tr><td colspan="8" class="text-center" style="padding: 20px; color:#64748b;">Tidak ada rincian transaksi</td></tr>`;
     }
 
     segments.forEach(s => {
+        const isLunas = s.status === 'Lunas';
+        const isPartial = s.status === 'Sebagian';
+        const badgeClass = isLunas ? 'badge-lunas' : isPartial ? 'badge-sebagian' : 'badge-belum';
+        const statusText = isLunas ? 'LUNAS' : isPartial ? 'SEBAGIAN' : 'BELUM LUNAS';
+        const subInfo = (isLunas || isPartial) && s.paidAt ? `<div style="font-size: 10px; color: #64748b;">${formatDate(s.paidAt)}</div>` : '';
+
         html += `
             <tr>
                 <td class="text-center">${no++}</td>
                 <td>${formatDate(s.date)}</td>
-                <td>Penjualan Barang (${s.driverCount || 1} Sopir)</td>
-                <td class="text-center">${s.qty || 0} ${buyer.unit || 'unit'}</td>
+                <td>Penjualan Batu (${s.driverCount || 1} Sopir)${s.paymentNote ? ` - <small style="color:#475569;">${s.paymentNote}</small>` : ''}</td>
+                <td class="text-center">${s.qty.toLocaleString('id-ID')} ${buyer.unit || 'unit'}</td>
                 <td class="text-right">${formatCurrency(s.amount)}</td>
+                <td class="text-right" style="color: #059669; font-weight: 600;">${formatCurrency(s.paidAmount)}</td>
+                <td class="text-right" style="color: ${s.remainingAmount > 0 ? '#dc2626' : '#64748b'}; font-weight: ${s.remainingAmount > 0 ? 'bold' : 'normal'};">${formatCurrency(s.remainingAmount)}</td>
+                <td class="text-center">
+                    <span class="${badgeClass}">${statusText}</span>
+                    ${subInfo}
+                </td>
             </tr>
         `;
     });
-
- 
 
     html += `
                 </tbody>
                 <tfoot>
                     <tr class="total-row">
-                        <th colspan="4" class="text-right">TOTAL TAGIHAN BERSIH :</th>
-                        <th class="text-right" style="color: #b91c1c;">${formatCurrency(grandTotal)}</th>
+                        <th colspan="4" class="text-right">TOTAL TAGIHAN :</th>
+                        <th class="text-right" colspan="4">${formatCurrency(totalSales)}</th>
+                    </tr>
+                    <tr class="total-row">
+                        <th colspan="4" class="text-right" style="color: #059669;">TOTAL PEMBAYARAN MASUK (TERBAYAR) :</th>
+                        <th class="text-right" style="color: #059669;" colspan="4">${formatCurrency(totalPaid)}</th>
+                    </tr>
+                    <tr class="total-row">
+                        <th colspan="4" class="text-right" style="color: #dc2626;">SISA PIUTANG BERSIH :</th>
+                        <th class="text-right" style="color: #dc2626; font-size: 15px;" colspan="4">${formatCurrency(totalUnpaid)}</th>
                     </tr>
                 </tfoot>
             </table>

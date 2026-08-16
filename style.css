@@ -415,7 +415,7 @@ body {
     left: 50%;
     transform: translate(-50%, -50%) scale(0.95);
     background: var(--surface-color);
-    width: 100%;
+    width: 95%;
     max-width: 500px;
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-lg);
@@ -441,7 +441,7 @@ body {
 
 .modal-body {
     padding: 1.5rem;
-    max-height: 70vh;
+    max-height: 82vh;
     overflow-y: auto;
 }
 
