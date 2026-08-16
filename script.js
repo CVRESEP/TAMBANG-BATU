@@ -4826,6 +4826,162 @@ window.openAddSolarSupplierModal = () => {
     });
 };
 
+window.openBulkUpdateSolarSupplierModal = () => {
+    const data = getData();
+    const suppliers = getAllSolarSuppliers(data);
+    const startFilter = document.getElementById('filter-solar-start') ? document.getElementById('filter-solar-start').value : '';
+    const endFilter = document.getElementById('filter-solar-end') ? document.getElementById('filter-solar-end').value : '';
+    const today = new Date().toISOString().split('T')[0];
+
+    const defaultStart = startFilter || today;
+    const defaultEnd = endFilter || today;
+
+    let supplierOptions = '';
+    suppliers.forEach(sup => {
+        supplierOptions += `<option value="${sup}">${sup}</option>`;
+    });
+    supplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
+
+    const formHtml = `
+        <form id="form-bulk-solar-supplier" autocomplete="off">
+            <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #0369a1;">
+                <div style="font-weight: 700; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.25rem;">
+                    <span class="material-symbols-outlined" style="font-size: 18px;">info</span>
+                    Ubah Pemasok Rentang Tanggal
+                </div>
+                Pilih rentang tanggal dan nama pemasok. Semua transaksi solar (pembelian masuk & pemakaian) dalam rentang tanggal tersebut akan diperbarui ke pemasok yang dipilih dan disinkronkan ke database.
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="form-group">
+                    <label>Tanggal Mulai <span style="color:var(--danger)">*</span></label>
+                    <input type="date" id="bulk-start-date" class="form-control" value="${defaultStart}" required>
+                </div>
+                <div class="form-group">
+                    <label>Tanggal Akhir <span style="color:var(--danger)">*</span></label>
+                    <input type="date" id="bulk-end-date" class="form-control" value="${defaultEnd}" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Pilih Pemasok Baru <span style="color:var(--danger)">*</span></label>
+                <select id="bulk-supplier-select" class="form-control" onchange="handleBulkSupplierDropdownChange(this)" required>
+                    <option value="">-- Pilih Pemasok --</option>
+                    ${supplierOptions}
+                </select>
+            </div>
+
+            <div class="form-group" id="bulk-new-supplier-group" style="display: none;">
+                <label>Nama Pemasok Baru <span style="color:var(--danger)">*</span></label>
+                <input type="text" id="bulk-new-supplier-name" class="form-control" placeholder="Contoh: PT. PERTAMINA, MAS SEPTA, A" oninput="this.value = this.value.toUpperCase()">
+            </div>
+
+            <div class="form-actions" style="margin-top: 1.5rem;">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary" style="background: #0284c7;">
+                    <span class="material-symbols-outlined">sync</span> Terapkan Perubahan Pemasok
+                </button>
+            </div>
+        </form>
+    `;
+
+    openModal('Ubah Pemasok Rentang Tanggal', formHtml);
+
+    document.getElementById('form-bulk-solar-supplier').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const startDate = document.getElementById('bulk-start-date').value;
+        const endDate = document.getElementById('bulk-end-date').value;
+        const supplierSelect = document.getElementById('bulk-supplier-select').value;
+        let chosenSupplier = supplierSelect;
+
+        if (supplierSelect === '__NEW__') {
+            const newNameInput = document.getElementById('bulk-new-supplier-name').value.trim().toUpperCase();
+            if (!newNameInput) {
+                alert('Silakan masukkan nama pemasok baru!');
+                return;
+            }
+            chosenSupplier = newNameInput;
+        }
+
+        if (!startDate || !endDate) {
+            alert('Tanggal mulai dan tanggal akhir wajib diisi!');
+            return;
+        }
+
+        if (startDate > endDate) {
+            alert('Tanggal mulai tidak boleh melebihi tanggal akhir!');
+            return;
+        }
+
+        if (!chosenSupplier) {
+            alert('Pemasok wajib dipilih!');
+            return;
+        }
+
+        // Save new supplier to database if not existing
+        await window.saveSolarSupplierToDatabase(chosenSupplier);
+
+        const currentData = getData();
+
+        // 1. Update all manual solar items in range
+        if (currentData.solar) {
+            for (let i = 0; i < currentData.solar.length; i++) {
+                const s = currentData.solar[i];
+                if (s.date >= startDate && s.date <= endDate) {
+                    s.supplier = chosenSupplier;
+                    await saveData(currentData, 'solar', s);
+                }
+            }
+        }
+
+        // 2. Clear individual row overrides in range and set date overrides for the date range
+        if (!currentData.solarDateOverrides) currentData.solarDateOverrides = {};
+        if (currentData.solarRowOverrides) {
+            Object.keys(currentData.solarRowOverrides).forEach(rowId => {
+                const parts = rowId.split('-');
+                if (parts.length >= 4) {
+                    const rowDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
+                    if (rowDate >= startDate && rowDate <= endDate) {
+                        delete currentData.solarRowOverrides[rowId];
+                    }
+                }
+            });
+        }
+
+        // Apply date override for all days in range
+        let cur = new Date(startDate);
+        const end = new Date(endDate);
+        while (cur <= end) {
+            const dateStr = cur.toISOString().split('T')[0];
+            currentData.solarDateOverrides[dateStr] = chosenSupplier;
+            cur.setDate(cur.getDate() + 1);
+        }
+
+        saveData(currentData);
+        closeModal();
+        render_solar();
+
+        alert(`✅ Berhasil memperbarui pemasok menjadi "${chosenSupplier}" untuk periode ${formatDate(startDate)} s.d ${formatDate(endDate)}.`);
+    });
+};
+
+window.handleBulkSupplierDropdownChange = (selectEl) => {
+    const newGroup = document.getElementById('bulk-new-supplier-group');
+    const newNameInput = document.getElementById('bulk-new-supplier-name');
+    if (!newGroup) return;
+
+    if (selectEl.value === '__NEW__') {
+        newGroup.style.display = 'block';
+        if (newNameInput) newNameInput.required = true;
+    } else {
+        newGroup.style.display = 'none';
+        if (newNameInput) {
+            newNameInput.required = false;
+            newNameInput.value = '';
+        }
+    }
+};
+
 function getDefaultSolarSupplier(data) {
     const solarExps = (data.expenseTypes || []).filter(e => e.linkedSolarSupplier && e.linkedSolarSupplier.trim());
     if (solarExps.length > 0) {
