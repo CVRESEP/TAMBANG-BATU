@@ -40,10 +40,8 @@ function printLaporanPDF() {
 }
 
 // ============================================================
-// State Management — Turso Integration
+// State Management — 100% Direct Turso Database Integration
 // ============================================================
-const STORAGE_KEY = 'tambangBatuData';
-
 const defaultData = {
     buyers: [],
     drivers: [],
@@ -62,23 +60,18 @@ let _cache = null;
 
 function getData() {
     if (!_cache) {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-            try {
-                _cache = JSON.parse(raw);
-            } catch(e) {
-                console.error("Gagal membaca localStorage", e);
-                _cache = JSON.parse(JSON.stringify(defaultData));
-            }
-        } else {
-            _cache = JSON.parse(JSON.stringify(defaultData));
-        }
+        _cache = JSON.parse(JSON.stringify(defaultData));
     }
     return _cache;
 }
 
+let _isFetchingTurso = false;
+let _appInitialized = false;
+
 // Fetch all data from Turso
 async function fetchAllDataFromTurso() {
+    if (_isFetchingTurso) return;
+    _isFetchingTurso = true;
     console.log("📥 Mengambil data dari Turso via Cloudflare API...");
     try {
         const response = await fetch('/api/sync');
@@ -88,12 +81,31 @@ async function fetchAllDataFromTurso() {
         const solarDateOverrides = {};
         const solarRowOverrides = {};
         (data.solarOverrides || []).forEach(o => {
+            let supVal = o.supplier;
+            if (typeof supVal === 'string' && supVal.startsWith('{') && supVal.includes('"split"')) {
+                try {
+                    supVal = JSON.parse(supVal);
+                } catch (e) {}
+            }
             if (o.id && o.id.startsWith('row-')) {
                 const rowKey = o.id.replace('row-', '');
-                solarRowOverrides[rowKey] = o.supplier;
-            } else if (o.date && o.supplier) {
-                solarDateOverrides[o.date] = o.supplier;
+                solarRowOverrides[rowKey] = supVal;
+            } else if (o.date) {
+                solarDateOverrides[o.date] = supVal;
             }
+        });
+
+        // Filter and clean duplicate manual auto-split entries from previous bug
+        let cleanSolar = (data.solar || []).filter(s => {
+            if (s.description && (
+                s.description.startsWith('PEMAKAIAN HARIAN (BAGIAN') ||
+                s.description.startsWith('PEMAKAIAN HARIAN (BAGIAN 1') ||
+                s.description.startsWith('PEMAKAIAN HARIAN (BAGIAN 2')
+            )) {
+                deleteFromDatabase('solar', s.id);
+                return false;
+            }
+            return true;
         });
 
         _cache = {
@@ -119,7 +131,7 @@ async function fetchAllDataFromTurso() {
                 payments: typeof t.payments === 'string' ? JSON.parse(t.payments) : (t.payments || [])
             })),
             profiles: (data.profiles || []).map(p => ({ ...p, fullName: p.full_name })),
-            solar: data.solar || [],
+            solar: cleanSolar,
             solarSuppliers: data.solarSuppliers || [],
             solarDateOverrides: solarDateOverrides,
             solarRowOverrides: solarRowOverrides
@@ -152,6 +164,8 @@ async function fetchAllDataFromTurso() {
         console.log("✅ Data berhasil disinkronkan dari Turso.");
     } catch (e) {
         console.error("❌ Gagal mengambil data dari Turso:", e);
+    } finally {
+        _isFetchingTurso = false;
     }
 }
 
@@ -203,6 +217,9 @@ async function initAuth() {
     const session = localStorage.getItem('session');
     if (session) {
         handleUserSignIn(JSON.parse(session));
+    } else {
+        const overlay = document.getElementById('loading-overlay');
+        if (overlay) overlay.style.display = 'none';
     }
 }
 
@@ -210,7 +227,10 @@ async function handleUserSignIn(user) {
     localStorage.setItem('session', JSON.stringify(user));
     currentUser = user;
     
-    document.getElementById('header-user-name').textContent = `${user.profile?.full_name || user.username} (${user.profile?.role || 'User'})`;
+    const userNameEl = document.getElementById('header-user-name');
+    if (userNameEl) {
+        userNameEl.textContent = `${user.profile?.full_name || user.username} (${user.profile?.role || 'User'})`;
+    }
     const navUsers = document.getElementById('nav-users');
     if (navUsers) {
         if (user.profile?.role === 'Admin') {
@@ -222,9 +242,9 @@ async function handleUserSignIn(user) {
 
     document.getElementById('login-page').style.display = 'none';
     document.getElementById('main-app').style.display = 'flex';
-    document.getElementById('loading-overlay').style.display = 'none';
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) overlay.style.display = 'none';
 
-    await fetchAllDataFromTurso();
     bootApp();
 }
 
@@ -250,7 +270,6 @@ window.logout = async () => {
 
 async function saveData(data, table = null, item = null) {
     _cache = data;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 
     if (table && item) {
         try {
@@ -266,7 +285,7 @@ async function saveData(data, table = null, item = null) {
             console.log(`✅ Berhasil simpan ke Turso (${table})`);
         } catch (e) {
             console.error(`❌ Gagal simpan ke Turso (${table}):`, e);
-            alert(`Gagal menyimpan ke database cloud: ${e.message}. Perubahan mungkin hilang saat refresh.`);
+            alert(`Gagal menyimpan ke database cloud: ${e.message}.`);
         }
     }
 }
@@ -287,22 +306,30 @@ function updateData(key, newArray) {
     saveData(data);
 }
 
-// App boot — called once on page load
+// App boot — Memuat semua data 100% langsung dari database Turso
 async function bootApp() {
-    console.log("🛠️ [DEBUG] bootApp dipanggil (Mode Turso)!");
+    console.log("🛠️ [DEBUG] Memuat data langsung dari Database Turso...");
     
     const overlay = document.getElementById('loading-overlay');
+    if (overlay) overlay.style.display = 'flex';
+
     try {
-        // Coba load dari Turso
         await fetchAllDataFromTurso();
-        _initApp();
+        if (!_appInitialized) {
+            _initApp();
+            _appInitialized = true;
+        } else {
+            const activePage = document.querySelector('.page.active');
+            if (activePage && window[`render_${activePage.id}`]) {
+                window[`render_${activePage.id}`]();
+            }
+        }
     } catch(err) {
-        console.error('Boot error:', err);
-        // Fallback ke local
-        _initApp();
+        console.error('Error fetching data from database:', err);
+        showToast('Gagal memuat data dari database!', 'danger');
     } finally {
         if (overlay) overlay.style.display = 'none';
-        console.log("✅ [DEBUG] App siap digunakan.");
+        console.log("✅ [DEBUG] Data berhasil dimuat langsung dari database.");
     }
 }
 
@@ -858,6 +885,120 @@ function getCalculatedSolarRecords(data) {
     const sortedUsageDates = Object.keys(dailyUsages).sort((a, b) => new Date(a) - new Date(b));
     const autoKeluar = [];
 
+    function pushAutoKeluarItems(autoKeluarList, rowId, date, amount, fallbackSupplier, expNamesStr, dataObj) {
+        let rowOverride = dataObj.solarRowOverrides ? dataObj.solarRowOverrides[rowId] : null;
+        let dateOverride = dataObj.solarDateOverrides ? dataObj.solarDateOverrides[date] : null;
+
+        if (typeof rowOverride === 'string' && rowOverride.startsWith('{') && rowOverride.includes('"split"')) {
+            try { rowOverride = JSON.parse(rowOverride); } catch(e){}
+        }
+        if (typeof dateOverride === 'string' && dateOverride.startsWith('{') && dateOverride.includes('"split"')) {
+            try { dateOverride = JSON.parse(dateOverride); } catch(e){}
+        }
+
+        // 1. Check Row-Level Split Override
+        if (rowOverride && typeof rowOverride === 'object' && rowOverride.split) {
+            const sup1 = (rowOverride.sup1 || fallbackSupplier).toUpperCase().trim();
+            const sup2 = (rowOverride.sup2 || fallbackSupplier).toUpperCase().trim();
+            let q1 = parseFloat(rowOverride.qty1);
+            let q2 = parseFloat(rowOverride.qty2);
+
+            if (isNaN(q1) || isNaN(q2)) {
+                const p1 = parseFloat(rowOverride.pct1) || 50;
+                q1 = Math.round(amount * (p1 / 100) * 100) / 100;
+                q2 = Math.round((amount - q1) * 100) / 100;
+            } else {
+                const overrideTot = q1 + q2;
+                if (Math.abs(overrideTot - amount) > 0.01 && overrideTot > 0) {
+                    const ratio = amount / overrideTot;
+                    q1 = Math.round(q1 * ratio * 100) / 100;
+                    q2 = Math.round((amount - q1) * 100) / 100;
+                }
+            }
+
+            autoKeluarList.push({
+                id: `${rowId}__part1`,
+                date: date,
+                type: 'Keluar',
+                supplier: sup1,
+                amount: q1,
+                description: `PEMAKAIAN HARIAN (BAGIAN 1: ${sup1}) [${expNamesStr}]`,
+                isAuto: true,
+                parentRowId: rowId,
+                splitPart: 1,
+                totalOriginalAmount: amount
+            });
+
+            autoKeluarList.push({
+                id: `${rowId}__part2`,
+                date: date,
+                type: 'Keluar',
+                supplier: sup2,
+                amount: q2,
+                description: `PEMAKAIAN HARIAN (BAGIAN 2: ${sup2}) [${expNamesStr}]`,
+                isAuto: true,
+                parentRowId: rowId,
+                splitPart: 2,
+                totalOriginalAmount: amount
+            });
+            return;
+        }
+
+        // 2. Check Date-Level Split Override
+        if (dateOverride && typeof dateOverride === 'object' && dateOverride.split) {
+            const sup1 = (dateOverride.sup1 || fallbackSupplier).toUpperCase().trim();
+            const sup2 = (dateOverride.sup2 || fallbackSupplier).toUpperCase().trim();
+            const p1 = parseFloat(dateOverride.pct1) || 50;
+            const q1 = Math.round(amount * (p1 / 100) * 100) / 100;
+            const q2 = Math.round((amount - q1) * 100) / 100;
+
+            autoKeluarList.push({
+                id: `${rowId}__part1`,
+                date: date,
+                type: 'Keluar',
+                supplier: sup1,
+                amount: q1,
+                description: `PEMAKAIAN HARIAN (BAGIAN 1: ${sup1}) [${expNamesStr}]`,
+                isAuto: true,
+                parentRowId: rowId,
+                splitPart: 1,
+                totalOriginalAmount: amount
+            });
+
+            autoKeluarList.push({
+                id: `${rowId}__part2`,
+                date: date,
+                type: 'Keluar',
+                supplier: sup2,
+                amount: q2,
+                description: `PEMAKAIAN HARIAN (BAGIAN 2: ${sup2}) [${expNamesStr}]`,
+                isAuto: true,
+                parentRowId: rowId,
+                splitPart: 2,
+                totalOriginalAmount: amount
+            });
+            return;
+        }
+
+        // 3. Single Supplier (Row Override > Date Override > Fallback)
+        const finalSupplier = (typeof rowOverride === 'string' && rowOverride.trim())
+            ? rowOverride.trim().toUpperCase()
+            : ((typeof dateOverride === 'string' && dateOverride.trim())
+                ? dateOverride.trim().toUpperCase()
+                : fallbackSupplier.toUpperCase().trim());
+
+        autoKeluarList.push({
+            id: rowId,
+            date: date,
+            type: 'Keluar',
+            supplier: finalSupplier,
+            amount: amount,
+            description: `PEMAKAIAN HARIAN (${finalSupplier}) [${expNamesStr}]`,
+            isAuto: true,
+            totalOriginalAmount: amount
+        });
+    }
+
     // 5. FIFO deduction across batches (regular supplier stock will NOT go negative)
     sortedUsageDates.forEach(date => {
         const usage = dailyUsages[date];
@@ -875,21 +1016,7 @@ function getCalculatedSolarRecords(data) {
                 rowSeq++;
 
                 const rowId = `auto-${date}-${batch.id || ('batch_' + i)}-${rowSeq}`;
-                const supplier = (data.solarRowOverrides && data.solarRowOverrides[rowId])
-                    ? data.solarRowOverrides[rowId]
-                    : ((data.solarDateOverrides && data.solarDateOverrides[date])
-                        ? data.solarDateOverrides[date]
-                        : batch.supplier);
-
-                autoKeluar.push({
-                    id: rowId,
-                    date: date,
-                    type: 'Keluar',
-                    supplier: supplier,
-                    amount: take,
-                    description: `PEMAKAIAN HARIAN (FIFO) [${expNamesStr}]`,
-                    isAuto: true
-                });
+                pushAutoKeluarItems(autoKeluar, rowId, date, take, batch.supplier, expNamesStr, data);
             }
         }
 
@@ -903,21 +1030,7 @@ function getCalculatedSolarRecords(data) {
                     rowSeq++;
 
                     const rowId = `auto-${date}-${masukBatches[i].id || ('batch_' + i)}-${rowSeq}`;
-                    const supplier = (data.solarRowOverrides && data.solarRowOverrides[rowId])
-                        ? data.solarRowOverrides[rowId]
-                        : ((data.solarDateOverrides && data.solarDateOverrides[date])
-                            ? data.solarDateOverrides[date]
-                            : masukBatches[i].supplier);
-
-                    autoKeluar.push({
-                        id: rowId,
-                        date: date,
-                        type: 'Keluar',
-                        supplier: supplier,
-                        amount: take,
-                        description: `PEMAKAIAN HARIAN (FIFO) [${expNamesStr}]`,
-                        isAuto: true
-                    });
+                    pushAutoKeluarItems(autoKeluar, rowId, date, take, masukBatches[i].supplier, expNamesStr, data);
                 }
             }
         }
@@ -926,21 +1039,7 @@ function getCalculatedSolarRecords(data) {
         if (needed > 0) {
             rowSeq++;
             const rowId = `auto-${date}-dex-${rowSeq}`;
-            const supplier = (data.solarRowOverrides && data.solarRowOverrides[rowId])
-                ? data.solarRowOverrides[rowId]
-                : ((data.solarDateOverrides && data.solarDateOverrides[date])
-                    ? data.solarDateOverrides[date]
-                    : pertaminaDexSup);
-
-            autoKeluar.push({
-                id: rowId,
-                date: date,
-                type: 'Keluar',
-                supplier: supplier,
-                amount: needed,
-                description: `PEMAKAIAN HARIAN (${pertaminaDexSup}) [${expNamesStr}]`,
-                isAuto: true
-            });
+            pushAutoKeluarItems(autoKeluar, rowId, date, needed, pertaminaDexSup, expNamesStr, data);
         }
     });
 
@@ -1057,6 +1156,7 @@ window.render_solar = () => {
                 const isSelected = (sup === supName) ? 'selected' : '';
                 rowSupplierOptions += `<option value="${sup}" ${isSelected}>${sup}</option>`;
             });
+            rowSupplierOptions += `<option value="__SPLIT__">✂️ Bagi Jadi 2 Pemasok...</option>`;
             rowSupplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
 
             html += `
@@ -3582,12 +3682,12 @@ window.render_penagihan = () => {
                         <thead>
                             <tr style="background: #ffffff; border-bottom: 2px solid var(--border-color);">
                                 <th style="width: 14%;">Tanggal Transaksi</th>
-                                <th style="width: 22%;">Keterangan Penjualan</th>
+                                <th style="width: 20%;">Jumlah Truk / Sopir</th>
                                 <th style="width: 10%; text-align: right;">Volume</th>
                                 <th style="width: 14%; text-align: right;">Tagihan (Rp)</th>
                                 <th style="width: 14%; text-align: right;">Terbayar & Sisa</th>
                                 <th style="width: 14%; text-align: center;">Status Pembayaran</th>
-                                <th style="width: 12%; text-align: center;">Aksi</th>
+                                <th style="width: 14%; text-align: center;">Aksi</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -3616,11 +3716,12 @@ window.render_penagihan = () => {
                                     `;
                                 }
 
+                                const payNoteClean = (s.lastPayment?.note && !s.lastPayment.note.includes('FIFO') && s.lastPayment.note !== 'Alokasi Pembayaran Masuk (FIFO)') ? s.lastPayment.note : '';
                                 const paymentMeta = (isLunas || isPartial) && s.lastPayment ? `
                                     <div style="font-size: 0.75rem; color: #475569; margin-top: 0.25rem; line-height: 1.25;">
                                         <span>${formatDate(s.lastPayment.date)}</span>
                                         ${s.lastPayment.method ? ` • <span style="font-weight:600; color:#334155;">${s.lastPayment.method}</span>` : ''}
-                                        ${s.lastPayment.note ? `<br><span style="color:#64748b; font-style:italic;">"${s.lastPayment.note}"</span>` : ''}
+                                        ${payNoteClean ? `<br><span style="color:#64748b; font-style:italic;">"${payNoteClean}"</span>` : ''}
                                     </div>
                                 ` : '';
 
@@ -3629,9 +3730,8 @@ window.render_penagihan = () => {
                                         <td style="font-weight: 600; color: #1e293b;">
                                             ${formatDate(s.date)}
                                         </td>
-                                        <td>
-                                            <div style="font-weight: 600; color: #334155;">Penjualan Ritase / Batu</div>
-                                            <div style="font-size: 0.75rem; color: #64748b;">Jumlah Sopir: ${s.driverCount}</div>
+                                        <td style="text-align: center; font-weight: 600; color: #334155;">
+                                            ${s.driverCount || 1}
                                         </td>
                                         <td style="text-align: right; font-weight: 600; color: #334155;">
                                             ${s.qty.toLocaleString('id-ID')} <small style="color: #64748b; font-weight: normal;">${buyer.unit || 'Ton'}</small>
@@ -3812,12 +3912,12 @@ window.openPaymentModal = (txId, buyerId) => {
         const payNote = document.getElementById('bayar-note').value.trim();
 
         if (payAmount <= 0) {
-            alert('Nominal pembayaran harus lebih besar dari Rp 0!');
+            showToast('Nominal pembayaran harus lebih besar dari Rp 0!', 'warning');
             return;
         }
 
         if (!payDate) {
-            alert('Tanggal pembayaran wajib diisi!');
+            showToast('Tanggal pembayaran wajib diisi!', 'warning');
             return;
         }
 
@@ -4275,7 +4375,7 @@ window.openBulkPaymentAllocationModal = (buyerId) => {
         const payNote = document.getElementById('bulk-pay-note').value.trim();
 
         if (!payDate) {
-            alert('Tanggal pembayaran wajib diisi!');
+            showToast('Tanggal pembayaran wajib diisi!', 'warning');
             return;
         }
 
@@ -4290,7 +4390,7 @@ window.openBulkPaymentAllocationModal = (buyerId) => {
         });
 
         if (allocationsToApply.length === 0) {
-            alert('Belum ada nominal pembayaran yang dialokasikan ke transaksi!');
+            showToast('Belum ada nominal pembayaran yang dialokasikan ke transaksi!', 'warning');
             return;
         }
 
@@ -4310,7 +4410,7 @@ window.openBulkPaymentAllocationModal = (buyerId) => {
                     date: payDate,
                     amount: alloc.amount,
                     method: payMethod,
-                    note: payNote ? payNote : 'Alokasi Pembayaran Masuk (FIFO)',
+                    note: payNote || '',
                     createdAt: new Date().toISOString()
                 };
 
@@ -4607,22 +4707,27 @@ window.printTagihan = (buyerId) => {
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Cetak Tagihan / Invoice - ${buyer.name}</title>
+            <title>&nbsp;</title>
             <style>
-                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.3; padding: 20px; font-size: 13px; background: white; }
-                .header { text-align: center; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
-                .header h1 { margin: 0 0 5px 0; font-size: 22px; color: #0f172a; }
-                .info-table { width: 100%; margin-bottom: 15px; }
-                .info-table td { padding: 3px 0; }
-                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
-                .data-table th { background: #f8fafc; font-weight: 600; color: #475569; }
+                * { box-sizing: border-box; }
+                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.2; padding: 15px 20px; font-size: 11.5px; background: white; }
+                .header { text-align: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1.5px solid #cbd5e1; }
+                .header h1 { margin: 0 0 2px 0; font-size: 16px; font-weight: 700; color: #0f172a; letter-spacing: 0.3px; }
+                .info-table { width: 100%; margin-bottom: 8px; font-size: 11.5px; }
+                .info-table td { padding: 1.5px 0; }
+                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 11px; }
+                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 3.5px 6px; text-align: left; vertical-align: middle; }
+                .data-table th { background: #f8fafc; font-weight: 700; color: #334155; padding: 4px 6px; }
                 .text-right { text-align: right !important; }
                 .text-center { text-align: center !important; }
-                .badge-lunas { color: #059669; font-weight: bold; background: #ecfdf5; padding: 2px 6px; border-radius: 4px; border: 1px solid #a7f3d0; font-size: 11px; }
-                .badge-sebagian { color: #d97706; font-weight: bold; background: #fffbeb; padding: 2px 6px; border-radius: 4px; border: 1px solid #fde68a; font-size: 11px; }
-                .badge-belum { color: #e11d48; font-weight: bold; background: #fff1f2; padding: 2px 6px; border-radius: 4px; border: 1px solid #fecdd3; font-size: 11px; }
-                .total-row th { background: #f8fafc; font-size: 14px; color: #0f172a; padding: 8px 10px; }
+                .badge-lunas { color: #059669; font-weight: bold; background: #ecfdf5; padding: 1.5px 5px; border-radius: 3px; border: 1px solid #a7f3d0; font-size: 9.5px; display: inline-block; }
+                .badge-sebagian { color: #d97706; font-weight: bold; background: #fffbeb; padding: 1.5px 5px; border-radius: 3px; border: 1px solid #fde68a; font-size: 9.5px; display: inline-block; }
+                .badge-belum { color: #e11d48; font-weight: bold; background: #fff1f2; padding: 1.5px 5px; border-radius: 3px; border: 1px solid #fecdd3; font-size: 9.5px; display: inline-block; }
+                .total-row th { background: #f8fafc; font-size: 11.5px; color: #0f172a; padding: 4px 6px; }
+                @page {
+                    size: auto;
+                    margin: 8mm 10mm;
+                }
                 @media print {
                     body { -webkit-print-color-adjust: exact; padding: 0; }
                     .no-print { display: none; }
@@ -4630,20 +4735,20 @@ window.printTagihan = (buyerId) => {
             </style>
         </head>
         <body>
-            <div class="no-print" style="margin-bottom:20px; text-align:right;">
-                <button onclick="window.print()" style="padding:10px 20px; background:#10b981; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold; font-size: 14px;">🖨️ Cetak Sekarang</button>
+            <div class="no-print" style="margin-bottom:12px; text-align:right;">
+                <button onclick="window.print()" style="padding:6px 14px; background:#10b981; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold; font-size: 12px;">🖨️ Cetak Sekarang</button>
             </div>
             
             <div class="header">
-                <img src="${window.location.origin}/HEADER%20RESEP.png" alt="Header CV RESEP" style="width: 100%; max-width: 800px; height: auto; display: block; margin: 0 auto 15px auto;">
-                <h1 style="font-size: 20px;">INVOICE & REKAP PIUTANG</h1>
-                <p style="margin:0; color:#64748b;">${periodText}</p>
+                <img src="${window.location.origin}/HEADER%20RESEP.png" alt="Header CV RESEP" style="width: 100%; max-width: 440px; height: auto; display: block; margin: 0 auto 5px auto;">
+                <h1>INVOICE & REKAP PIUTANG</h1>
+                <p style="margin:0; color:#64748b; font-size: 11px;">${periodText}</p>
             </div>
 
             <table class="info-table">
                 <tr>
-                    <td style="width: 120px; color:#64748b;">Kepada Yth.</td>
-                    <td style="font-weight: bold; font-size: 15px;">: ${buyer.name}</td>
+                    <td style="width: 100px; color:#64748b;">Kepada Yth.</td>
+                    <td style="font-weight: bold; font-size: 13px;">: ${buyer.name}</td>
                 </tr>
                 <tr>
                     <td style="color:#64748b;">Alamat</td>
@@ -4658,9 +4763,9 @@ window.printTagihan = (buyerId) => {
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="width: 35px;" class="text-center">No</th>
-                        <th style="width: 15%;">Tanggal</th>
-                        <th>Keterangan</th>
+                        <th style="width: 30px;" class="text-center">No</th>
+                        <th style="width: 14%;">Tanggal</th>
+                        <th class="text-center" style="width: 16%;">Jumlah Truk/Sopir</th>
                         <th class="text-center" style="width: 12%;">Volume</th>
                         <th class="text-right" style="width: 15%;">Tagihan (Rp)</th>
                         <th class="text-right" style="width: 15%;">Terbayar (Rp)</th>
@@ -4673,7 +4778,7 @@ window.printTagihan = (buyerId) => {
 
     let no = 1;
     if (segments.length === 0) {
-        html += `<tr><td colspan="8" class="text-center" style="padding: 20px; color:#64748b;">Tidak ada rincian transaksi</td></tr>`;
+        html += `<tr><td colspan="8" class="text-center" style="padding: 15px; color:#64748b;">Tidak ada rincian transaksi</td></tr>`;
     }
 
     segments.forEach(s => {
@@ -4681,13 +4786,13 @@ window.printTagihan = (buyerId) => {
         const isPartial = s.status === 'Sebagian';
         const badgeClass = isLunas ? 'badge-lunas' : isPartial ? 'badge-sebagian' : 'badge-belum';
         const statusText = isLunas ? 'LUNAS' : isPartial ? 'SEBAGIAN' : 'BELUM LUNAS';
-        const subInfo = (isLunas || isPartial) && s.paidAt ? `<div style="font-size: 10px; color: #64748b;">${formatDate(s.paidAt)}</div>` : '';
+        const subInfo = (isLunas || isPartial) && s.paidAt ? `<div style="font-size: 9px; color: #64748b; margin-top: 1px; line-height: 1;">${formatDate(s.paidAt)}</div>` : '';
 
         html += `
             <tr>
                 <td class="text-center">${no++}</td>
                 <td>${formatDate(s.date)}</td>
-                <td>Penjualan Batu (${s.driverCount || 1} Sopir)${s.paymentNote ? ` - <small style="color:#475569;">${s.paymentNote}</small>` : ''}</td>
+                <td class="text-center" style="font-weight: 600;">${s.driverCount || 1}</td>
                 <td class="text-center">${s.qty.toLocaleString('id-ID')} ${buyer.unit || 'unit'}</td>
                 <td class="text-right">${formatCurrency(s.amount)}</td>
                 <td class="text-right" style="color: #059669; font-weight: 600;">${formatCurrency(s.paidAmount)}</td>
@@ -4713,13 +4818,13 @@ window.printTagihan = (buyerId) => {
                     </tr>
                     <tr class="total-row">
                         <th colspan="4" class="text-right" style="color: #dc2626;">SISA PIUTANG BERSIH :</th>
-                        <th class="text-right" style="color: #dc2626; font-size: 15px;" colspan="4">${formatCurrency(totalUnpaid)}</th>
+                        <th class="text-right" style="color: #dc2626; font-size: 12.5px;" colspan="4">${formatCurrency(totalUnpaid)}</th>
                     </tr>
                 </tfoot>
             </table>
 
-            <div style="margin-top: 30px; text-align: right; padding-right: 50px;">
-                <p style="margin-bottom: 60px; color:#64748b;">Hormat Kami,</p>
+            <div style="margin-top: 15px; text-align: right; padding-right: 40px; font-size: 11.5px;">
+                <p style="margin-bottom: 40px; color:#64748b;">Hormat Kami,</p>
                 <p style="font-weight: bold; border-bottom: 1px solid #1e293b; display: inline-block; padding-bottom: 2px;">CV. RESEP</p>
             </div>
         </body>
@@ -4801,12 +4906,12 @@ window.printRekapSolar = () => {
 
             rowsHtml += `
                 <tr>
-                    <td class="text-center">${idx + 1}</td>
-                    <td>${formatDate(s.date)}</td>
+                    <td class="text-center" style="width: 35px;">${idx + 1}</td>
+                    <td style="white-space: nowrap; font-weight: 500;">${formatDate(s.date)}</td>
                     <td style="font-weight: 600;">${(s.supplier || '-').toUpperCase()}</td>
-                    <td class="text-right" style="color: #166534; font-weight: ${masuk > 0 ? '600' : 'normal'};">${masuk > 0 ? masuk.toLocaleString('id-ID') : '-'}</td>
-                    <td class="text-right" style="color: #991b1b; font-weight: ${keluar > 0 ? '600' : 'normal'};">${keluar > 0 ? keluar.toLocaleString('id-ID') : '-'}</td>
-                    <td class="text-right" style="font-weight: bold; color: ${runningBalance >= 0 ? '#0f172a' : '#b91c1c'};">${runningBalance.toLocaleString('id-ID')}</td>
+                    <td class="text-right" style="color: #166534; font-weight: ${masuk > 0 ? '600' : 'normal'}; white-space: nowrap;">${masuk > 0 ? masuk.toLocaleString('id-ID') : '-'}</td>
+                    <td class="text-right" style="color: #991b1b; font-weight: ${keluar > 0 ? '600' : 'normal'}; white-space: nowrap;">${keluar > 0 ? keluar.toLocaleString('id-ID') : '-'}</td>
+                    <td class="text-right" style="font-weight: bold; color: ${runningBalance >= 0 ? '#0f172a' : '#b91c1c'}; white-space: nowrap;">${runningBalance.toLocaleString('id-ID')}</td>
                 </tr>
             `;
         });
@@ -4829,19 +4934,24 @@ window.printRekapSolar = () => {
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Cetak Rekapitulasi Solar</title>
+            <title>&nbsp;</title>
             <style>
-                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.2; padding: 20px; font-size: 13px; background: white; }
-                .header { text-align: center; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; }
-                .header h1 { margin: 0 0 4px 0; font-size: 20px; color: #0f172a; }
-                .info-table { width: 100%; margin-bottom: 12px; }
-                .info-table td { padding: 2px 0; font-size: 13px; }
-                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
-                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 5px 8px; text-align: left; }
-                .data-table th { background: #f8fafc; font-weight: 600; color: #475569; }
+                * { box-sizing: border-box; }
+                body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; line-height: 1.2; padding: 15px 20px; font-size: 12px; background: white; }
+                .header { text-align: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1.5px solid #cbd5e1; }
+                .header h1 { margin: 0 0 4px 0; font-size: 18px; font-weight: 700; color: #0f172a; letter-spacing: 0.3px; }
+                .info-table { width: 100%; margin-bottom: 10px; font-size: 12px; }
+                .info-table td { padding: 2px 0; font-size: 12px; }
+                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 11.5px; }
+                .data-table th, .data-table td { border: 1px solid #cbd5e1; padding: 4.5px 8px; text-align: left; vertical-align: middle; }
+                .data-table th { background: #f8fafc; font-weight: 700; color: #334155; }
                 .text-right { text-align: right !important; }
                 .text-center { text-align: center !important; }
-                .total-row th { background: #f1f5f9; font-size: 14px; color: #0f172a; padding: 6px 8px; }
+                .total-row th { background: #f1f5f9; font-size: 12px; color: #0f172a; padding: 5px 8px; }
+                @page {
+                    size: auto;
+                    margin: 8mm 10mm;
+                }
                 @media print {
                     body { -webkit-print-color-adjust: exact; padding: 0; }
                     .no-print { display: none; }
@@ -4849,14 +4959,14 @@ window.printRekapSolar = () => {
             </style>
         </head>
         <body>
-            <div class="no-print" style="margin-bottom:20px; text-align:right;">
-                <button onclick="window.print()" style="padding:8px 18px; background:#10b981; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold; font-size: 13px;">🖨️ Cetak Sekarang</button>
+            <div class="no-print" style="margin-bottom:15px; text-align:right;">
+                <button onclick="window.print()" style="padding:6px 16px; background:#10b981; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold; font-size: 12.5px;">🖨️ Cetak Sekarang</button>
             </div>
             
             <div class="header">
-                <img src="${window.location.origin}/HEADER%20RESEP.png" alt="Header CV RESEP" style="width: 100%; max-width: 800px; height: auto; display: block; margin: 0 auto 12px auto;">
+                <img src="${window.location.origin}/HEADER%20RESEP.png" alt="Header CV RESEP" style="width: 100%; max-width: 580px; height: auto; display: block; margin: 0 auto 8px auto;">
                 <h1>REKAPITULASI PEMAKAIAN & STOK SOLAR</h1>
-                <p style="margin:0; color:#64748b; font-size: 13px;">${periodText} | ${supplierText}</p>
+                <p style="margin:0; color:#64748b; font-size: 12px;">${periodText} | ${supplierText}</p>
             </div>
 
             <table class="info-table">
@@ -4870,12 +4980,12 @@ window.printRekapSolar = () => {
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="width: 40px;" class="text-center">No</th>
-                        <th style="width: 120px;">Tanggal</th>
+                        <th style="width: 35px;" class="text-center">No</th>
+                        <th style="width: 180px; white-space: nowrap;">Tanggal</th>
                         <th>Pemasok</th>
-                        <th style="width: 110px;" class="text-right">Masuk (L)</th>
-                        <th style="width: 110px;" class="text-right">Keluar (L)</th>
-                        <th style="width: 120px;" class="text-right">Saldo (L)</th>
+                        <th style="width: 100px; white-space: nowrap;" class="text-right">Masuk (L)</th>
+                        <th style="width: 100px; white-space: nowrap;" class="text-right">Keluar (L)</th>
+                        <th style="width: 110px; white-space: nowrap;" class="text-right">Saldo (L)</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -4884,9 +4994,9 @@ window.printRekapSolar = () => {
                 <tfoot>
                     <tr class="total-row">
                         <th colspan="3" class="text-right">TOTAL :</th>
-                        <th class="text-right" style="color: #166534;">+ ${totalMasuk.toLocaleString('id-ID')}</th>
-                        <th class="text-right" style="color: #991b1b;">- ${totalKeluar.toLocaleString('id-ID')}</th>
-                        <th class="text-right" style="color: ${totalSaldo >= 0 ? '#0f766e' : '#b91c1c'};">${totalSaldo.toLocaleString('id-ID')}</th>
+                        <th class="text-right" style="color: #166534; white-space: nowrap;">+ ${totalMasuk.toLocaleString('id-ID')}</th>
+                        <th class="text-right" style="color: #991b1b; white-space: nowrap;">- ${totalKeluar.toLocaleString('id-ID')}</th>
+                        <th class="text-right" style="color: ${totalSaldo >= 0 ? '#0f766e' : '#b91c1c'}; white-space: nowrap;">${totalSaldo.toLocaleString('id-ID')}</th>
                     </tr>
                 </tfoot>
             </table>
@@ -4895,17 +5005,6 @@ window.printRekapSolar = () => {
                 <div style="font-weight: bold; font-size: 12px; color: #475569; margin-bottom: 6px; text-transform: uppercase;">Ringkasan Stok Per Pemasok (Periode Ini):</div>
                 <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                     ${supCardsHtml || '<div style="font-size:12px; color:#94a3b8;">-</div>'}
-                </div>
-            </div>
-
-            <div style="margin-top: 30px; display: flex; justify-content: space-between; padding: 0 40px;">
-                <div style="text-align: center;">
-                    <p style="margin-bottom: 50px; color:#64748b; font-size: 13px;">Petugas Lapangan,</p>
-                    <p style="font-weight: bold; border-bottom: 1px solid #1e293b; display: inline-block; padding-bottom: 2px; min-width: 120px;">( &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; )</p>
-                </div>
-                <div style="text-align: center;">
-                    <p style="margin-bottom: 50px; color:#64748b; font-size: 13px;">Hormat Kami,</p>
-                    <p style="font-weight: bold; border-bottom: 1px solid #1e293b; display: inline-block; padding-bottom: 2px;">CV. RESEP</p>
                 </div>
             </div>
         </body>
@@ -5754,12 +5853,22 @@ function getAllSolarSuppliers(data) {
     });
     if (data.solarRowOverrides) {
         Object.values(data.solarRowOverrides).forEach(sup => {
-            if (sup && sup.trim()) supSet.add(sup.trim().toUpperCase());
+            if (typeof sup === 'string' && sup.trim()) {
+                supSet.add(sup.trim().toUpperCase());
+            } else if (sup && typeof sup === 'object') {
+                if (sup.sup1 && typeof sup.sup1 === 'string' && sup.sup1.trim()) supSet.add(sup.sup1.trim().toUpperCase());
+                if (sup.sup2 && typeof sup.sup2 === 'string' && sup.sup2.trim()) supSet.add(sup.sup2.trim().toUpperCase());
+            }
         });
     }
     if (data.solarDateOverrides) {
         Object.values(data.solarDateOverrides).forEach(sup => {
-            if (sup && sup.trim()) supSet.add(sup.trim().toUpperCase());
+            if (typeof sup === 'string' && sup.trim()) {
+                supSet.add(sup.trim().toUpperCase());
+            } else if (sup && typeof sup === 'object') {
+                if (sup.sup1 && typeof sup.sup1 === 'string' && sup.sup1.trim()) supSet.add(sup.sup1.trim().toUpperCase());
+                if (sup.sup2 && typeof sup.sup2 === 'string' && sup.sup2.trim()) supSet.add(sup.sup2.trim().toUpperCase());
+            }
         });
     }
     return Array.from(supSet).sort();
@@ -5767,10 +5876,32 @@ function getAllSolarSuppliers(data) {
 
 window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
     let chosenSupplier = selectEl.value;
+    const prevVal = selectEl.getAttribute('data-prev-val') || '';
+
+    if (chosenSupplier === '__SPLIT__') {
+        selectEl.value = prevVal; // Reset dropdown selection visually
+        const data = getData();
+        const records = getCalculatedSolarRecords(data);
+        const rec = records.find(r => r.id === id);
+
+        let targetId = id;
+        let amount = rec ? (parseFloat(rec.amount) || 0) : 0;
+        let currentSup = rec ? rec.supplier : prevVal;
+        let type = rec ? rec.type : 'Keluar';
+
+        if (rec && rec.parentRowId) {
+            targetId = rec.parentRowId;
+            amount = rec.totalOriginalAmount || (amount * 2);
+        }
+
+        window.openSplitSolarModal(targetId, isAuto, date, amount, currentSup, type);
+        return;
+    }
+
     if (chosenSupplier === '__NEW__') {
         const input = prompt('Masukkan Nama Pemasok Solar Baru (Contoh: PT. PERTAMINA, MAS SEPTA, PERTAMINA DEX):');
         if (!input || !input.trim()) {
-            selectEl.value = selectEl.getAttribute('data-prev-val') || '';
+            selectEl.value = prevVal;
             return;
         }
         chosenSupplier = input.trim().toUpperCase();
@@ -5782,18 +5913,19 @@ window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
     const data = getData();
 
     if (isAuto) {
-        // Save override ONLY for this specific row ID
+        const baseRowId = id.replace(/__part\d+$/, '');
         if (!data.solarRowOverrides) data.solarRowOverrides = {};
-        data.solarRowOverrides[id] = chosenSupplier;
-        
+        data.solarRowOverrides[baseRowId] = chosenSupplier;
+
         const overrideItem = {
-            id: `row-${id}`,
+            id: `row-${baseRowId}`,
             date: date,
             supplier: chosenSupplier,
             created_at: new Date().toISOString()
         };
         await saveData(data, 'solar_overrides', overrideItem);
         render_solar();
+        showToast(`Pemasok diubah ke "${chosenSupplier}"`, 'success');
     } else {
         if (!data.solar) data.solar = [];
         const index = data.solar.findIndex(s => s.id === id);
@@ -5811,8 +5943,283 @@ window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
             data.solar[index] = solarItem;
             await saveData(data, 'solar', solarItem);
             render_solar();
+            showToast(`Pemasok diubah ke "${chosenSupplier}"`, 'success');
         }
     }
+};
+
+window.openSplitSolarModal = (recordId, isAuto, date, totalAmount, currentSupplier, type) => {
+    const data = getData();
+    const suppliers = getAllSolarSuppliers(data);
+    const numTotal = parseFloat(totalAmount) || 0;
+    const halfQty = Math.round((numTotal / 2) * 100) / 100;
+    const sup1 = (currentSupplier || suppliers[0] || '').toUpperCase();
+    const sup2 = (suppliers.find(s => s.toUpperCase() !== sup1) || suppliers[0] || sup1).toUpperCase();
+
+    let sup1Options = '';
+    let sup2Options = '';
+    suppliers.forEach(s => {
+        sup1Options += `<option value="${s}" ${s === sup1 ? 'selected' : ''}>${s}</option>`;
+        sup2Options += `<option value="${s}" ${s === sup2 ? 'selected' : ''}>${s}</option>`;
+    });
+
+    const formHtml = `
+        <form id="form-split-solar" autocomplete="off">
+            <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #0369a1;">
+                <div style="font-weight: 700; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.35rem;">
+                    <span class="material-symbols-outlined" style="font-size: 18px;">call_split</span>
+                    Bagi Transaksi Menjadi 2 Pemasok
+                </div>
+                <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.25rem; font-size: 0.8rem; color: #075985;">
+                    <span>📅 Tanggal: <strong>${formatDate(date)}</strong></span>
+                    <span>📦 Total Volume: <strong>${numTotal.toLocaleString('id-ID')} Liter</strong></span>
+                    <span>🏷️ Jenis: <strong>${type || 'Solar'}</strong></span>
+                </div>
+            </div>
+
+            <!-- Preset Buttons -->
+            <div style="display: flex; align-items: center; gap: 0.4rem; margin-bottom: 1rem; flex-wrap: wrap;">
+                <span style="font-size: 0.8rem; font-weight: 600; color: #475569;">Bagi Cepat (Preset):</span>
+                <button type="button" class="btn btn-sm" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySplitPresets(0.5, ${numTotal})">50% : 50%</button>
+                <button type="button" class="btn btn-sm" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySplitPresets(0.6, ${numTotal})">60% : 40%</button>
+                <button type="button" class="btn btn-sm" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySplitPresets(0.7, ${numTotal})">70% : 30%</button>
+                <button type="button" class="btn btn-sm" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySplitPresets(0.8, ${numTotal})">80% : 20%</button>
+            </div>
+
+            <!-- Two Suppliers Cards -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                <!-- Pemasok 1 Card -->
+                <div style="background: #ffffff; border: 1.5px solid #0284c7; border-radius: 8px; padding: 0.85rem;">
+                    <div style="font-weight: 700; color: #0284c7; font-size: 0.85rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                        <span class="material-symbols-outlined" style="font-size: 16px;">looks_one</span> Pemasok 1
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0.65rem;">
+                        <label style="font-size: 0.75rem; margin-bottom: 0.2rem;">Pilih Pemasok 1 <span style="color:var(--danger)">*</span></label>
+                        <select id="split-sup-1" class="form-control" style="font-size: 0.85rem; font-weight: 600;" required>
+                            ${sup1Options}
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label style="font-size: 0.75rem; margin-bottom: 0.2rem;">Jumlah Liter <span style="color:var(--danger)">*</span></label>
+                        <input type="number" id="split-qty-1" class="form-control" step="0.01" value="${halfQty}" style="font-weight: 700; color: #0284c7;" required oninput="window.onSplitQty1Change(${numTotal})">
+                    </div>
+                </div>
+
+                <!-- Pemasok 2 Card -->
+                <div style="background: #ffffff; border: 1.5px solid #10b981; border-radius: 8px; padding: 0.85rem;">
+                    <div style="font-weight: 700; color: #059669; font-size: 0.85rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.25rem;">
+                        <span class="material-symbols-outlined" style="font-size: 16px;">looks_two</span> Pemasok 2
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0.65rem;">
+                        <label style="font-size: 0.75rem; margin-bottom: 0.2rem;">Pilih Pemasok 2 <span style="color:var(--danger)">*</span></label>
+                        <select id="split-sup-2" class="form-control" style="font-size: 0.85rem; font-weight: 600;" required>
+                            ${sup2Options}
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label style="font-size: 0.75rem; margin-bottom: 0.2rem;">Jumlah Liter <span style="color:var(--danger)">*</span></label>
+                        <input type="number" id="split-qty-2" class="form-control" step="0.01" value="${Math.round((numTotal - halfQty)*100)/100}" style="font-weight: 700; color: #059669;" required oninput="window.onSplitQty2Change(${numTotal})">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Balance Status Banner -->
+            <div id="split-balance-banner" style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.8rem; color: #166534; display: flex; align-items: center; justify-content: space-between;">
+                <span>Total: <strong id="split-total-sum">${numTotal.toLocaleString('id-ID')}</strong> / ${numTotal.toLocaleString('id-ID')} Liter</span>
+                <span id="split-match-badge" style="font-weight: 700; color: #16a34a;">✓ Pas</span>
+            </div>
+
+            <!-- Loading Progress Box -->
+            <div id="split-loading-box" style="display: none; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.75rem; margin-top: 1rem; flex-direction: column; align-items: center; justify-content: center; gap: 0.4rem; text-align: center;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; color: #0284c7; font-weight: 600; font-size: 0.85rem;">
+                    <span class="spinner" style="width: 18px; height: 18px; border: 2px solid #bae6fd; border-top-color: #0284c7;"></span>
+                    <span>Menyimpan pembagian pemasok ke database...</span>
+                </div>
+            </div>
+
+            <div class="form-actions" style="margin-top: 1.25rem;">
+                <button type="button" id="btn-cancel-split" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" id="btn-submit-split" class="btn btn-primary" style="background: #0284c7; display: inline-flex; align-items: center; gap: 0.4rem;">
+                    <span class="material-symbols-outlined">call_split</span> Simpan Pembagian
+                </button>
+            </div>
+        </form>
+    `;
+
+    openModal('✂️ Bagi Menjadi 2 Pemasok Solar', formHtml);
+
+    window.applySplitPresets = (ratio1, total) => {
+        const q1 = Math.round(total * ratio1 * 100) / 100;
+        const q2 = Math.round((total - q1) * 100) / 100;
+        const in1 = document.getElementById('split-qty-1');
+        const in2 = document.getElementById('split-qty-2');
+        if (in1) in1.value = q1;
+        if (in2) in2.value = q2;
+        window.checkSplitMatch(total);
+    };
+
+    window.onSplitQty1Change = (total) => {
+        const in1 = document.getElementById('split-qty-1');
+        const in2 = document.getElementById('split-qty-2');
+        const v1 = parseFloat(in1 ? in1.value : 0) || 0;
+        const v2 = Math.max(0, Math.round((total - v1) * 100) / 100);
+        if (in2) in2.value = v2;
+        window.checkSplitMatch(total);
+    };
+
+    window.onSplitQty2Change = (total) => {
+        const in1 = document.getElementById('split-qty-1');
+        const in2 = document.getElementById('split-qty-2');
+        const v2 = parseFloat(in2 ? in2.value : 0) || 0;
+        const v1 = Math.max(0, Math.round((total - v2) * 100) / 100);
+        if (in1) in1.value = v1;
+        window.checkSplitMatch(total);
+    };
+
+    window.checkSplitMatch = (total) => {
+        const v1 = parseFloat(document.getElementById('split-qty-1')?.value || 0) || 0;
+        const v2 = parseFloat(document.getElementById('split-qty-2')?.value || 0) || 0;
+        const sum = Math.round((v1 + v2) * 100) / 100;
+        const totalSumEl = document.getElementById('split-total-sum');
+        const badgeEl = document.getElementById('split-match-badge');
+        const banner = document.getElementById('split-balance-banner');
+        if (totalSumEl) totalSumEl.textContent = sum.toLocaleString('id-ID');
+
+        if (Math.abs(sum - total) < 0.01) {
+            if (badgeEl) { badgeEl.textContent = '✓ Pas'; badgeEl.style.color = '#16a34a'; }
+            if (banner) { banner.style.background = '#f0fdf4'; banner.style.borderColor = '#bbf7d0'; banner.style.color = '#166534'; }
+        } else {
+            const diff = Math.round((sum - total) * 100) / 100;
+            if (badgeEl) { badgeEl.textContent = diff > 0 ? `+${diff} L (Lebih)` : `${diff} L (Kurang)`; badgeEl.style.color = '#dc2626'; }
+            if (banner) { banner.style.background = '#fef2f2'; banner.style.borderColor = '#fecaca'; banner.style.color = '#991b1b'; }
+        }
+    };
+
+    document.getElementById('form-split-solar').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const chosen1 = document.getElementById('split-sup-1').value.trim().toUpperCase();
+        const chosen2 = document.getElementById('split-sup-2').value.trim().toUpperCase();
+        const qty1 = parseFloat(document.getElementById('split-qty-1').value) || 0;
+        const qty2 = parseFloat(document.getElementById('split-qty-2').value) || 0;
+
+        if (!chosen1 || !chosen2) {
+            showToast('Pilih kedua pemasok!', 'warning');
+            return;
+        }
+
+        if (qty1 <= 0 || qty2 <= 0) {
+            showToast('Jumlah liter untuk setiap pemasok harus lebih besar dari 0!', 'warning');
+            return;
+        }
+
+        if (Math.abs((qty1 + qty2) - numTotal) > 0.05) {
+            showToast(`Total liter (${(qty1 + qty2).toLocaleString('id-ID')}) tidak sama dengan volume transaksi (${numTotal.toLocaleString('id-ID')})!`, 'warning');
+            return;
+        }
+
+        const submitBtn = document.getElementById('btn-submit-split');
+        const cancelBtn = document.getElementById('btn-cancel-split');
+        const loadingBox = document.getElementById('split-loading-box');
+        if (loadingBox) loadingBox.style.display = 'flex';
+        if (cancelBtn) cancelBtn.disabled = true;
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<span class="spinner" style="width:14px; height:14px; border:2px solid rgba(255,255,255,0.4); border-top-color:white; margin-right:4px;"></span> Menyimpan...`;
+        }
+
+        try {
+            await window.saveSolarSupplierToDatabase(chosen1);
+            await window.saveSolarSupplierToDatabase(chosen2);
+
+            const curData = getData();
+            if (!curData.solar) curData.solar = [];
+
+            if (!isAuto) {
+                // Manual record in data.solar
+                const index = curData.solar.findIndex(s => s.id === recordId);
+                if (index > -1) {
+                    const original = curData.solar[index];
+                    original.supplier = chosen1;
+                    original.amount = qty1;
+                    const cleanOrig = {
+                        id: original.id,
+                        date: original.date,
+                        type: original.type,
+                        amount: qty1,
+                        description: (original.description || '').replace(/\s*\(Bagian \d\)/g, '') + ' (Bagian 1)',
+                        supplier: chosen1,
+                        created_at: original.created_at || new Date().toISOString()
+                    };
+                    curData.solar[index] = cleanOrig;
+                    await saveData(curData, 'solar', cleanOrig);
+
+                    const secondItem = {
+                        id: generateId(),
+                        date: original.date,
+                        type: original.type,
+                        amount: qty2,
+                        description: (original.description || '').replace(/\s*\(Bagian \d\)/g, '') + ' (Bagian 2)',
+                        supplier: chosen2,
+                        created_at: new Date().toISOString()
+                    };
+                    curData.solar.push(secondItem);
+                    await saveData(curData, 'solar', secondItem);
+                }
+            } else {
+                // Auto usage: save split override in solar_overrides (and data.solarRowOverrides)
+                const baseRowId = recordId.replace(/__part\d+$/, '');
+                const splitData = {
+                    split: true,
+                    sup1: chosen1,
+                    qty1: qty1,
+                    sup2: chosen2,
+                    qty2: qty2
+                };
+
+                if (!curData.solarRowOverrides) curData.solarRowOverrides = {};
+                curData.solarRowOverrides[baseRowId] = splitData;
+
+                const overrideItem = {
+                    id: `row-${baseRowId}`,
+                    date: date,
+                    supplier: JSON.stringify(splitData),
+                    created_at: new Date().toISOString()
+                };
+                await saveData(curData, 'solar_overrides', overrideItem);
+
+                // Self-healing: if any dirty manual entries were created on this date from previous bug, remove them
+                if (curData.solar) {
+                    const dirtyEntries = curData.solar.filter(s => 
+                        s.date === date && s.description && (
+                            s.description.startsWith('PEMAKAIAN HARIAN (BAGIAN') ||
+                            s.description.startsWith('PEMAKAIAN HARIAN (BAGIAN 1') ||
+                            s.description.startsWith('PEMAKAIAN HARIAN (BAGIAN 2')
+                        )
+                    );
+                    if (dirtyEntries.length > 0) {
+                        curData.solar = curData.solar.filter(s => !dirtyEntries.includes(s));
+                        for (const dirty of dirtyEntries) {
+                            await deleteFromDatabase('solar', dirty.id);
+                        }
+                    }
+                }
+            }
+
+            saveData(curData);
+            closeModal();
+            render_solar();
+            showToast(`✅ Berhasil membagi transaksi: ${chosen1} (${qty1.toLocaleString('id-ID')} L) & ${chosen2} (${qty2.toLocaleString('id-ID')} L)!`, 'success');
+        } catch (err) {
+            console.error('Error split solar:', err);
+            if (loadingBox) loadingBox.style.display = 'none';
+            if (cancelBtn) cancelBtn.disabled = false;
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = `<span class="material-symbols-outlined">call_split</span> Simpan Pembagian`;
+            }
+            showToast('Gagal membagi pemasok: ' + (err.message || 'Terjadi kesalahan sistem'), 'error');
+        }
+    });
 };
 
 window.openAddSolarSupplierModal = () => {
@@ -5870,7 +6277,7 @@ window.openAddSolarSupplierModal = () => {
         e.preventDefault();
         const supplierName = document.getElementById('new-solar-supplier-name').value.trim().toUpperCase();
         if (!supplierName) {
-            alert('Nama pemasok wajib diisi!');
+            showToast('Nama pemasok wajib diisi!', 'warning');
             return;
         }
 
@@ -5925,7 +6332,7 @@ window.openAddSolarSupplierModal = () => {
         closeModal();
         if (window.render_solar) window.render_solar();
         if (window.render_pengeluaran) window.render_pengeluaran();
-        alert(`Pemasok "${supplierName}" berhasil disimpan ke database!`);
+        showToast(`✅ Pemasok "${supplierName}" berhasil disimpan ke database!`, 'success');
     });
 };
 
@@ -5940,10 +6347,18 @@ window.openBulkUpdateSolarSupplierModal = () => {
     const defaultEnd = endFilter || today;
 
     let supplierOptions = '';
-    suppliers.forEach(sup => {
+    let supplierOptionsOnly = '';
+    suppliers.forEach((sup, idx) => {
         supplierOptions += `<option value="${sup}">${sup}</option>`;
+        supplierOptionsOnly += `<option value="${sup}" ${idx === 0 ? 'selected' : ''}>${sup}</option>`;
     });
+    supplierOptions += `<option value="__SPLIT__">✂️ Bagi Menjadi 2 Pemasok (Rasio / Proporsional)...</option>`;
     supplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
+
+    let sup2DefaultOptions = '';
+    suppliers.forEach((sup, idx) => {
+        sup2DefaultOptions += `<option value="${sup}" ${idx === 1 || (suppliers.length === 1 && idx === 0) ? 'selected' : ''}>${sup}</option>`;
+    });
 
     const formHtml = `
         <form id="form-bulk-solar-supplier" autocomplete="off">
@@ -5974,14 +6389,57 @@ window.openBulkUpdateSolarSupplierModal = () => {
                 </select>
             </div>
 
+            <!-- Single New Supplier Group -->
             <div class="form-group" id="bulk-new-supplier-group" style="display: none;">
                 <label>Nama Pemasok Baru <span style="color:var(--danger)">*</span></label>
                 <input type="text" id="bulk-new-supplier-name" class="form-control" placeholder="Contoh: PT. PERTAMINA, MAS SEPTA, A" oninput="this.value = this.value.toUpperCase()">
             </div>
 
-            <div class="form-actions" style="margin-top: 1.5rem;">
-                <button type="button" class="btn" onclick="closeModal()">Batal</button>
-                <button type="submit" class="btn btn-primary" style="background: #0284c7;">
+            <!-- Dual Supplier Split Group -->
+            <div class="form-group" id="bulk-split-group" style="display: none; background: #f8fafc; border: 1.5px solid #0284c7; border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem;">
+                <div style="font-weight: 700; color: #0284c7; font-size: 0.85rem; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.3rem;">
+                    <span class="material-symbols-outlined" style="font-size: 18px;">call_split</span>
+                    Pembagian Rasio 2 Pemasok Solar
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.6rem;">
+                    <div style="background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.6rem;">
+                        <label style="font-size: 0.75rem; font-weight: 600; color: #0284c7;">Pemasok 1 <span style="color:var(--danger)">*</span></label>
+                        <select id="bulk-split-sup-1" class="form-control" style="font-size: 0.85rem; font-weight: 600;">
+                            ${supplierOptionsOnly}
+                        </select>
+                        <label style="font-size: 0.75rem; font-weight: 600; margin-top: 0.4rem; color: #475569;">Persentase (%)</label>
+                        <input type="number" id="bulk-split-pct-1" class="form-control" value="50" min="1" max="99" style="font-weight: 700; color: #0284c7;" oninput="window.onBulkSplitPct1Change()">
+                    </div>
+                    <div style="background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.6rem;">
+                        <label style="font-size: 0.75rem; font-weight: 600; color: #059669;">Pemasok 2 <span style="color:var(--danger)">*</span></label>
+                        <select id="bulk-split-sup-2" class="form-control" style="font-size: 0.85rem; font-weight: 600;">
+                            ${sup2DefaultOptions}
+                        </select>
+                        <label style="font-size: 0.75rem; font-weight: 600; margin-top: 0.4rem; color: #475569;">Persentase (%)</label>
+                        <input type="number" id="bulk-split-pct-2" class="form-control" value="50" min="1" max="99" style="font-weight: 700; color: #059669;" oninput="window.onBulkSplitPct2Change()">
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+                    <span style="font-size: 0.75rem; color: #64748b; font-weight: 600;">Preset:</span>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.setBulkSplitPreset(50, 50)">50% : 50%</button>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.setBulkSplitPreset(60, 40)">60% : 40%</button>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.setBulkSplitPreset(70, 30)">70% : 30%</button>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.setBulkSplitPreset(80, 20)">80% : 20%</button>
+                </div>
+            </div>
+
+            <!-- Loading Progress Box -->
+            <div id="bulk-solar-loading-box" style="display: none; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.9rem 1rem; margin-top: 1rem; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem; text-align: center;">
+                <div style="display: flex; align-items: center; gap: 0.6rem; color: #0284c7; font-weight: 600; font-size: 0.9rem;">
+                    <span class="spinner" style="width: 20px; height: 20px; border: 3px solid #bae6fd; border-top-color: #0284c7;"></span>
+                    <span id="bulk-solar-loading-text">Sedang memproses perubahan pemasok...</span>
+                </div>
+                <div style="font-size: 0.8rem; color: #64748b;" id="bulk-solar-loading-subtext">Mohon tunggu, menyinkronkan data transaksi ke database server...</div>
+            </div>
+
+            <div class="form-actions" id="bulk-solar-actions" style="margin-top: 1.5rem;">
+                <button type="button" id="btn-cancel-bulk-supplier" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" id="btn-submit-bulk-supplier" class="btn btn-primary" style="background: #0284c7; display: inline-flex; align-items: center; gap: 0.4rem;">
                     <span class="material-symbols-outlined">sync</span> Terapkan Perubahan Pemasok
                 </button>
             </div>
@@ -5990,6 +6448,25 @@ window.openBulkUpdateSolarSupplierModal = () => {
 
     openModal('Ubah Pemasok Rentang Tanggal', formHtml);
 
+    window.onBulkSplitPct1Change = () => {
+        const p1 = parseFloat(document.getElementById('bulk-split-pct-1')?.value || 0) || 0;
+        const p2Input = document.getElementById('bulk-split-pct-2');
+        if (p2Input) p2Input.value = Math.max(0, Math.min(100, Math.round((100 - p1) * 100) / 100));
+    };
+
+    window.onBulkSplitPct2Change = () => {
+        const p2 = parseFloat(document.getElementById('bulk-split-pct-2')?.value || 0) || 0;
+        const p1Input = document.getElementById('bulk-split-pct-1');
+        if (p1Input) p1Input.value = Math.max(0, Math.min(100, Math.round((100 - p2) * 100) / 100));
+    };
+
+    window.setBulkSplitPreset = (p1, p2) => {
+        const in1 = document.getElementById('bulk-split-pct-1');
+        const in2 = document.getElementById('bulk-split-pct-2');
+        if (in1) in1.value = p1;
+        if (in2) in2.value = p2;
+    };
+
     document.getElementById('form-bulk-solar-supplier').addEventListener('submit', async (e) => {
         e.preventDefault();
         const startDate = document.getElementById('bulk-start-date').value;
@@ -5997,113 +6474,269 @@ window.openBulkUpdateSolarSupplierModal = () => {
         const supplierSelect = document.getElementById('bulk-supplier-select').value;
         let chosenSupplier = supplierSelect;
 
-        if (supplierSelect === '__NEW__') {
-            const newNameInput = document.getElementById('bulk-new-supplier-name').value.trim().toUpperCase();
-            if (!newNameInput) {
-                alert('Silakan masukkan nama pemasok baru!');
-                return;
-            }
-            chosenSupplier = newNameInput;
-        }
-
         if (!startDate || !endDate) {
-            alert('Tanggal mulai dan tanggal akhir wajib diisi!');
+            showToast('Tanggal mulai dan tanggal akhir wajib diisi!', 'warning');
             return;
         }
 
         if (startDate > endDate) {
-            alert('Tanggal mulai tidak boleh melebihi tanggal akhir!');
+            showToast('Tanggal mulai tidak boleh melebihi tanggal akhir!', 'warning');
             return;
         }
 
-        if (!chosenSupplier) {
-            alert('Pemasok wajib dipilih!');
-            return;
-        }
-
-        // Save new supplier to database if not existing
-        await window.saveSolarSupplierToDatabase(chosenSupplier);
-
-        const currentData = getData();
-
-        // 1. Update all manual solar items in range & persist each to Turso
-        if (currentData.solar) {
-            for (let i = 0; i < currentData.solar.length; i++) {
-                const s = currentData.solar[i];
-                if (s.date >= startDate && s.date <= endDate) {
-                    s.supplier = chosenSupplier;
-                    const cleanItem = {
-                        id: s.id,
-                        date: s.date,
-                        type: s.type,
-                        amount: parseFloat(s.amount) || 0,
-                        description: s.description || '',
-                        supplier: chosenSupplier,
-                        created_at: s.created_at || new Date().toISOString()
-                    };
-                    currentData.solar[i] = cleanItem;
-                    await saveData(currentData, 'solar', cleanItem);
-                }
+        if (supplierSelect === '__NEW__') {
+            const newNameInput = document.getElementById('bulk-new-supplier-name').value.trim().toUpperCase();
+            if (!newNameInput) {
+                showToast('Silakan masukkan nama pemasok baru!', 'warning');
+                return;
             }
+            chosenSupplier = newNameInput;
+        } else if (supplierSelect === '__SPLIT__') {
+            const s1 = document.getElementById('bulk-split-sup-1').value.trim().toUpperCase();
+            const s2 = document.getElementById('bulk-split-sup-2').value.trim().toUpperCase();
+            const p1 = parseFloat(document.getElementById('bulk-split-pct-1').value) || 0;
+            const p2 = parseFloat(document.getElementById('bulk-split-pct-2').value) || 0;
+
+            if (!s1 || !s2) {
+                showToast('Pilih kedua pemasok untuk pembagian!', 'warning');
+                return;
+            }
+            if (p1 <= 0 || p2 <= 0 || Math.abs(p1 + p2 - 100) > 0.1) {
+                showToast('Total persentase pembagian harus 100%!', 'warning');
+                return;
+            }
+        } else if (!chosenSupplier) {
+            showToast('Pemasok wajib dipilih!', 'warning');
+            return;
         }
 
-        // 2. Clear individual row overrides in range from database & memory
-        if (!currentData.solarDateOverrides) currentData.solarDateOverrides = {};
-        if (currentData.solarRowOverrides) {
-            const rowsToDelete = [];
-            Object.keys(currentData.solarRowOverrides).forEach(rowId => {
-                const parts = rowId.split('-');
-                if (parts.length >= 4) {
-                    const rowDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
-                    if (rowDate >= startDate && rowDate <= endDate) {
-                        rowsToDelete.push(rowId);
-                        delete currentData.solarRowOverrides[rowId];
+        const submitBtn = document.getElementById('btn-submit-bulk-supplier');
+        const cancelBtn = document.getElementById('btn-cancel-bulk-supplier');
+        const loadingBox = document.getElementById('bulk-solar-loading-box');
+        const loadingText = document.getElementById('bulk-solar-loading-text');
+        const formInputs = document.querySelectorAll('#form-bulk-solar-supplier input, #form-bulk-solar-supplier select');
+
+        // Activate UI Loading Animation & Lock Inputs
+        if (loadingBox) loadingBox.style.display = 'flex';
+        if (cancelBtn) cancelBtn.disabled = true;
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.75';
+            submitBtn.style.cursor = 'wait';
+            submitBtn.innerHTML = `<span class="spinner" style="width:16px; height:16px; border:2px solid rgba(255,255,255,0.4); border-top-color:white; margin-right:4px;"></span> Memproses...`;
+        }
+        formInputs.forEach(input => input.disabled = true);
+
+        try {
+            const currentData = getData();
+
+            if (supplierSelect === '__SPLIT__' || supplierSelect.startsWith('__SPLIT_CUSTOM:')) {
+                let s1, s2, p1, p2;
+                if (supplierSelect.startsWith('__SPLIT_CUSTOM:')) {
+                    const parts = supplierSelect.replace('__SPLIT_CUSTOM:', '').split(':');
+                    s1 = decodeURIComponent(parts[0] || '').trim().toUpperCase();
+                    p1 = parseFloat(parts[1]) || 50;
+                    s2 = decodeURIComponent(parts[2] || '').trim().toUpperCase();
+                    p2 = parseFloat(parts[3]) || 50;
+                } else {
+                    s1 = document.getElementById('bulk-split-sup-1').value.trim().toUpperCase();
+                    s2 = document.getElementById('bulk-split-sup-2').value.trim().toUpperCase();
+                    p1 = parseFloat(document.getElementById('bulk-split-pct-1').value) || 0;
+                    p2 = parseFloat(document.getElementById('bulk-split-pct-2').value) || 0;
+                }
+
+                await window.saveSolarSupplierToDatabase(s1);
+                await window.saveSolarSupplierToDatabase(s2);
+
+                if (loadingText) loadingText.textContent = `Membagi transaksi solar periode ${formatDate(startDate)} s.d ${formatDate(endDate)} (${p1}% ${s1} : ${p2}% ${s2})...`;
+
+                const splitDateData = {
+                    split: true,
+                    sup1: s1,
+                    pct1: p1,
+                    sup2: s2,
+                    pct2: p2
+                };
+
+                // 1. Update manual records in data.solar
+                if (currentData.solar) {
+                    const originalItems = [...currentData.solar];
+                    for (let i = 0; i < originalItems.length; i++) {
+                        const s = originalItems[i];
+                        if (s.date >= startDate && s.date <= endDate) {
+                            const totalAmt = parseFloat(s.amount) || 0;
+                            const amt1 = Math.round(totalAmt * (p1 / 100) * 100) / 100;
+                            const amt2 = Math.round((totalAmt - amt1) * 100) / 100;
+
+                            // Update part 1
+                            const idx = currentData.solar.findIndex(x => x.id === s.id);
+                            if (idx > -1) {
+                                const cleanItem1 = {
+                                    id: s.id,
+                                    date: s.date,
+                                    type: s.type,
+                                    amount: amt1,
+                                    description: (s.description || '').replace(/\s*\(Bagian \d\)/g, '') + ' (Bagian 1)',
+                                    supplier: s1,
+                                    created_at: s.created_at || new Date().toISOString()
+                                };
+                                currentData.solar[idx] = cleanItem1;
+                                await saveData(currentData, 'solar', cleanItem1);
+                            }
+
+                            // Create part 2
+                            const cleanItem2 = {
+                                id: generateId(),
+                                date: s.date,
+                                type: s.type,
+                                amount: amt2,
+                                description: (s.description || '').replace(/\s*\(Bagian \d\)/g, '') + ' (Bagian 2)',
+                                supplier: s2,
+                                created_at: new Date().toISOString()
+                            };
+                            currentData.solar.push(cleanItem2);
+                            await saveData(currentData, 'solar', cleanItem2);
+                        }
                     }
                 }
-            });
-            for (const rowId of rowsToDelete) {
-                await deleteFromDatabase('solar_overrides', `row-${rowId}`);
+
+                // 2. Clear individual row overrides in this date range so date override applies cleanly
+                if (!currentData.solarDateOverrides) currentData.solarDateOverrides = {};
+                if (currentData.solarRowOverrides) {
+                    const rowsToDelete = [];
+                    Object.keys(currentData.solarRowOverrides).forEach(rowId => {
+                        const parts = rowId.split('-');
+                        if (parts.length >= 4) {
+                            const rowDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
+                            if (rowDate >= startDate && rowDate <= endDate) {
+                                rowsToDelete.push(rowId);
+                                delete currentData.solarRowOverrides[rowId];
+                            }
+                        }
+                    });
+                    for (const rowId of rowsToDelete) {
+                        await deleteFromDatabase('solar_overrides', `row-${rowId}`);
+                    }
+                }
+
+                // 3. Save Date Split Overrides for auto usage across the date range
+                let cur = new Date(startDate);
+                const end = new Date(endDate);
+                while (cur <= end) {
+                    const dateStr = cur.toISOString().split('T')[0];
+                    currentData.solarDateOverrides[dateStr] = splitDateData;
+                    const overrideItem = {
+                        id: `date-${dateStr}`,
+                        date: dateStr,
+                        supplier: JSON.stringify(splitDateData),
+                        created_at: new Date().toISOString()
+                    };
+                    await saveData(currentData, 'solar_overrides', overrideItem);
+                    cur.setDate(cur.getDate() + 1);
+                }
+
+                saveData(currentData);
+                closeModal();
+                render_solar();
+                showToast(`✅ Berhasil membagi pemasok (${s1}: ${p1}%, ${s2}: ${p2}%) periode ${formatDate(startDate)} - ${formatDate(endDate)}!`, 'success');
+            } else {
+                if (loadingText) loadingText.textContent = 'Menyimpan nama pemasok baru ke database...';
+                await window.saveSolarSupplierToDatabase(chosenSupplier);
+
+                if (loadingText) loadingText.textContent = `Memperbarui transaksi solar periode ${formatDate(startDate)} s.d ${formatDate(endDate)}...`;
+                if (currentData.solar) {
+                    for (let i = 0; i < currentData.solar.length; i++) {
+                        const s = currentData.solar[i];
+                        if (s.date >= startDate && s.date <= endDate) {
+                            s.supplier = chosenSupplier;
+                            const cleanItem = {
+                                id: s.id,
+                                date: s.date,
+                                type: s.type,
+                                amount: parseFloat(s.amount) || 0,
+                                description: s.description || '',
+                                supplier: chosenSupplier,
+                                created_at: s.created_at || new Date().toISOString()
+                            };
+                            currentData.solar[i] = cleanItem;
+                            await saveData(currentData, 'solar', cleanItem);
+                        }
+                    }
+                }
+
+                if (loadingText) loadingText.textContent = 'Menghapus override individual baris lama...';
+                if (!currentData.solarDateOverrides) currentData.solarDateOverrides = {};
+                if (currentData.solarRowOverrides) {
+                    const rowsToDelete = [];
+                    Object.keys(currentData.solarRowOverrides).forEach(rowId => {
+                        const parts = rowId.split('-');
+                        if (parts.length >= 4) {
+                            const rowDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
+                            if (rowDate >= startDate && rowDate <= endDate) {
+                                rowsToDelete.push(rowId);
+                                delete currentData.solarRowOverrides[rowId];
+                            }
+                        }
+                    });
+                    for (const rowId of rowsToDelete) {
+                        await deleteFromDatabase('solar_overrides', `row-${rowId}`);
+                    }
+                }
+
+                if (loadingText) loadingText.textContent = 'Menyimpan override pemasok rentang tanggal...';
+                let cur = new Date(startDate);
+                const end = new Date(endDate);
+                while (cur <= end) {
+                    const dateStr = cur.toISOString().split('T')[0];
+                    currentData.solarDateOverrides[dateStr] = chosenSupplier;
+                    const overrideItem = {
+                        id: `date-${dateStr}`,
+                        date: dateStr,
+                        supplier: chosenSupplier,
+                        created_at: new Date().toISOString()
+                    };
+                    await saveData(currentData, 'solar_overrides', overrideItem);
+                    cur.setDate(cur.getDate() + 1);
+                }
+
+                saveData(currentData);
+                closeModal();
+                render_solar();
+                showToast(`✅ Berhasil memperbarui pemasok menjadi "${chosenSupplier}" (${formatDate(startDate)} - ${formatDate(endDate)})!`, 'success');
             }
+        } catch (error) {
+            console.error('Error bulk updating solar supplier:', error);
+            if (loadingBox) loadingBox.style.display = 'none';
+            if (cancelBtn) cancelBtn.disabled = false;
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+                submitBtn.style.cursor = 'pointer';
+                submitBtn.innerHTML = `<span class="material-symbols-outlined">sync</span> Terapkan Perubahan Pemasok`;
+            }
+            formInputs.forEach(input => input.disabled = false);
+            showToast('Gagal memperbarui pemasok: ' + (error.message || 'Terjadi kesalahan sistem.'), 'error');
         }
-
-        // 3. Apply date override for all days in range & persist to Turso solar_overrides
-        let cur = new Date(startDate);
-        const end = new Date(endDate);
-        while (cur <= end) {
-            const dateStr = cur.toISOString().split('T')[0];
-            currentData.solarDateOverrides[dateStr] = chosenSupplier;
-            const overrideItem = {
-                id: `date-${dateStr}`,
-                date: dateStr,
-                supplier: chosenSupplier,
-                created_at: new Date().toISOString()
-            };
-            await saveData(currentData, 'solar_overrides', overrideItem);
-            cur.setDate(cur.getDate() + 1);
-        }
-
-        saveData(currentData);
-        closeModal();
-        render_solar();
-
-        alert(`✅ Berhasil memperbarui pemasok menjadi "${chosenSupplier}" untuk periode ${formatDate(startDate)} s.d ${formatDate(endDate)}.`);
     });
 };
 
 window.handleBulkSupplierDropdownChange = (selectEl) => {
     const newGroup = document.getElementById('bulk-new-supplier-group');
+    const splitGroup = document.getElementById('bulk-split-group');
     const newNameInput = document.getElementById('bulk-new-supplier-name');
-    if (!newGroup) return;
 
     if (selectEl.value === '__NEW__') {
-        newGroup.style.display = 'block';
+        if (newGroup) newGroup.style.display = 'block';
+        if (splitGroup) splitGroup.style.display = 'none';
         if (newNameInput) newNameInput.required = true;
+    } else if (selectEl.value === '__SPLIT__') {
+        if (newGroup) newGroup.style.display = 'none';
+        if (splitGroup) splitGroup.style.display = 'block';
+        if (newNameInput) { newNameInput.required = false; newNameInput.value = ''; }
     } else {
-        newGroup.style.display = 'none';
-        if (newNameInput) {
-            newNameInput.required = false;
-            newNameInput.value = '';
-        }
+        if (newGroup) newGroup.style.display = 'none';
+        if (splitGroup) splitGroup.style.display = 'none';
+        if (newNameInput) { newNameInput.required = false; newNameInput.value = ''; }
     }
 };
 
@@ -6117,6 +6750,17 @@ function getDefaultSolarSupplier(data) {
 }
 
 window.handleSolarSupplierChange = async (selectEl) => {
+    const splitBox = document.getElementById('solar-split-box');
+    if (selectEl.value === '__SPLIT__') {
+        if (splitBox) {
+            splitBox.style.display = 'block';
+            window.syncSolarModalSplitQuantities();
+        }
+        return;
+    } else {
+        if (splitBox) splitBox.style.display = 'none';
+    }
+
     if (selectEl.value === '__NEW__') {
         const newName = prompt('Masukkan Nama Pemasok Baru (Contoh: PT. PERTAMINA, MAS SEPTA, A):');
         if (newName && newName.trim()) {
@@ -6144,6 +6788,27 @@ window.handleSolarSupplierChange = async (selectEl) => {
     selectEl.setAttribute('data-prev-val', selectEl.value);
 };
 
+window.syncSolarModalSplitQuantities = () => {
+    const totalInput = document.getElementById('solar-amount');
+    const total = parseFloat(totalInput ? totalInput.value : 0) || 0;
+    const q1 = Math.round((total / 2) * 100) / 100;
+    const in1 = document.getElementById('solar-split-qty-1');
+    const in2 = document.getElementById('solar-split-qty-2');
+    if (in1 && (!in1.value || parseFloat(in1.value) === 0)) in1.value = q1;
+    if (in2 && (!in2.value || parseFloat(in2.value) === 0)) in2.value = Math.round((total - q1) * 100) / 100;
+};
+
+window.applySolarModalSplitRatio = (ratio) => {
+    const totalInput = document.getElementById('solar-amount');
+    const total = parseFloat(totalInput ? totalInput.value : 0) || 0;
+    const q1 = Math.round(total * ratio * 100) / 100;
+    const q2 = Math.round((total - q1) * 100) / 100;
+    const in1 = document.getElementById('solar-split-qty-1');
+    const in2 = document.getElementById('solar-split-qty-2');
+    if (in1) in1.value = q1;
+    if (in2) in2.value = q2;
+};
+
 window.openAddSolarModal = () => {
     document.getElementById('solar-id-field')?.remove();
     const data = getData();
@@ -6151,17 +6816,25 @@ window.openAddSolarModal = () => {
     const defaultSupplier = getDefaultSolarSupplier(data);
 
     let supplierOptions = '';
+    let supplierOptionsOnly = '';
     if (!defaultSupplier && suppliers.length === 0) {
         supplierOptions = '<option value="">-- Belum ada pemasok --</option>';
     } else if (!defaultSupplier) {
         supplierOptions = '<option value="">-- Pilih Pemasok --</option>';
     }
 
-    suppliers.forEach(s => {
+    suppliers.forEach((s, idx) => {
         const isSelected = (s === defaultSupplier) ? 'selected' : '';
         supplierOptions += `<option value="${s}" ${isSelected}>${s}</option>`;
+        supplierOptionsOnly += `<option value="${s}" ${idx === 0 ? 'selected' : ''}>${s}</option>`;
     });
+    supplierOptions += `<option value="__SPLIT__">✂️ Bagi Menjadi 2 Pemasok...</option>`;
     supplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
+
+    let sup2Options = '';
+    suppliers.forEach((s, idx) => {
+        sup2Options += `<option value="${s}" ${idx === 1 || (suppliers.length === 1 && idx === 0) ? 'selected' : ''}>${s}</option>`;
+    });
 
     const formHtml = `
         <form id="form-solar" autocomplete="off">
@@ -6176,6 +6849,39 @@ window.openAddSolarModal = () => {
                     ${supplierOptions}
                 </select>
             </div>
+
+            <!-- Split Box (Hidden by default) -->
+            <div id="solar-split-box" style="display: none; background: #f0f9ff; border: 1.5px solid #0284c7; border-radius: 8px; padding: 0.85rem; margin-bottom: 1.25rem;">
+                <div style="font-weight: 700; color: #0284c7; font-size: 0.85rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.3rem;">
+                    <span class="material-symbols-outlined" style="font-size: 18px;">call_split</span>
+                    Pembagian 2 Pemasok Solar
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin-bottom: 0.5rem;">
+                    <div style="background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem;">
+                        <label style="font-size: 0.75rem; font-weight: 600; color: #0284c7;">Pemasok 1</label>
+                        <select id="solar-split-sup-1" class="form-control" style="font-size: 0.85rem; font-weight: 600;">
+                            ${supplierOptionsOnly}
+                        </select>
+                        <label style="font-size: 0.75rem; font-weight: 600; margin-top: 0.35rem;">Liter Pemasok 1</label>
+                        <input type="number" id="solar-split-qty-1" class="form-control" step="0.01" placeholder="0" oninput="const tot = parseFloat(document.getElementById('solar-amount')?.value||0)||0; const q1 = parseFloat(this.value)||0; document.getElementById('solar-split-qty-2').value = Math.max(0, Math.round((tot-q1)*100)/100);">
+                    </div>
+                    <div style="background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem;">
+                        <label style="font-size: 0.75rem; font-weight: 600; color: #059669;">Pemasok 2</label>
+                        <select id="solar-split-sup-2" class="form-control" style="font-size: 0.85rem; font-weight: 600;">
+                            ${sup2Options}
+                        </select>
+                        <label style="font-size: 0.75rem; font-weight: 600; margin-top: 0.35rem;">Liter Pemasok 2</label>
+                        <input type="number" id="solar-split-qty-2" class="form-control" step="0.01" placeholder="0" oninput="const tot = parseFloat(document.getElementById('solar-amount')?.value||0)||0; const q2 = parseFloat(this.value)||0; document.getElementById('solar-split-qty-1').value = Math.max(0, Math.round((tot-q2)*100)/100);">
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.35rem; align-items: center;">
+                    <span style="font-size: 0.75rem; color: #64748b; font-weight: 600;">Preset:</span>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySolarModalSplitRatio(0.5)">50% : 50%</button>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySolarModalSplitRatio(0.7)">70% : 30%</button>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySolarModalSplitRatio(0.8)">80% : 20%</button>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label>Jenis</label>
                 <select id="solar-type" class="form-control" required>
@@ -6185,7 +6891,7 @@ window.openAddSolarModal = () => {
             </div>
             <div class="form-group">
                 <label>Jumlah (Liter)</label>
-                <input type="number" id="solar-amount" class="form-control" step="0.01" required>
+                <input type="number" id="solar-amount" class="form-control" step="0.01" required oninput="if(document.getElementById('solar-split-box')?.style.display !== 'none') window.syncSolarModalSplitQuantities()">
             </div>
             <div class="form-group">
                 <label>Keterangan</label>
@@ -6214,14 +6920,23 @@ window.editSolar = (id) => {
     const activeSupplier = (solar.supplier || getDefaultSolarSupplier(data) || '').toUpperCase().trim();
 
     let supplierOptions = '';
-    suppliers.forEach(s => {
+    let supplierOptionsOnly = '';
+    suppliers.forEach((s, idx) => {
         const isSelected = (s === activeSupplier) ? 'selected' : '';
         supplierOptions += `<option value="${s}" ${isSelected}>${s}</option>`;
+        supplierOptionsOnly += `<option value="${s}" ${idx === 0 ? 'selected' : ''}>${s}</option>`;
     });
     if (activeSupplier && !suppliers.includes(activeSupplier)) {
         supplierOptions = `<option value="${activeSupplier}" selected>${activeSupplier}</option>` + supplierOptions;
+        supplierOptionsOnly = `<option value="${activeSupplier}" selected>${activeSupplier}</option>` + supplierOptionsOnly;
     }
+    supplierOptions += `<option value="__SPLIT__">✂️ Bagi Menjadi 2 Pemasok...</option>`;
     supplierOptions += `<option value="__NEW__">+ Tambah Pemasok Baru...</option>`;
+
+    let sup2Options = '';
+    suppliers.forEach((s, idx) => {
+        sup2Options += `<option value="${s}" ${idx === 1 || (suppliers.length === 1 && idx === 0) ? 'selected' : ''}>${s}</option>`;
+    });
 
     const formHtml = `
         <form id="form-solar" autocomplete="off">
@@ -6236,6 +6951,39 @@ window.editSolar = (id) => {
                     ${supplierOptions}
                 </select>
             </div>
+
+            <!-- Split Box (Hidden by default) -->
+            <div id="solar-split-box" style="display: none; background: #f0f9ff; border: 1.5px solid #0284c7; border-radius: 8px; padding: 0.85rem; margin-bottom: 1.25rem;">
+                <div style="font-weight: 700; color: #0284c7; font-size: 0.85rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.3rem;">
+                    <span class="material-symbols-outlined" style="font-size: 18px;">call_split</span>
+                    Pembagian 2 Pemasok Solar
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin-bottom: 0.5rem;">
+                    <div style="background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem;">
+                        <label style="font-size: 0.75rem; font-weight: 600; color: #0284c7;">Pemasok 1</label>
+                        <select id="solar-split-sup-1" class="form-control" style="font-size: 0.85rem; font-weight: 600;">
+                            ${supplierOptionsOnly}
+                        </select>
+                        <label style="font-size: 0.75rem; font-weight: 600; margin-top: 0.35rem;">Liter Pemasok 1</label>
+                        <input type="number" id="solar-split-qty-1" class="form-control" step="0.01" value="${Math.round(((solar.amount||0)/2)*100)/100}" oninput="const tot = parseFloat(document.getElementById('solar-amount')?.value||0)||0; const q1 = parseFloat(this.value)||0; document.getElementById('solar-split-qty-2').value = Math.max(0, Math.round((tot-q1)*100)/100);">
+                    </div>
+                    <div style="background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem;">
+                        <label style="font-size: 0.75rem; font-weight: 600; color: #059669;">Pemasok 2</label>
+                        <select id="solar-split-sup-2" class="form-control" style="font-size: 0.85rem; font-weight: 600;">
+                            ${sup2Options}
+                        </select>
+                        <label style="font-size: 0.75rem; font-weight: 600; margin-top: 0.35rem;">Liter Pemasok 2</label>
+                        <input type="number" id="solar-split-qty-2" class="form-control" step="0.01" value="${Math.round(((solar.amount||0) - Math.round(((solar.amount||0)/2)*100)/100)*100)/100}" oninput="const tot = parseFloat(document.getElementById('solar-amount')?.value||0)||0; const q2 = parseFloat(this.value)||0; document.getElementById('solar-split-qty-1').value = Math.max(0, Math.round((tot-q2)*100)/100);">
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.35rem; align-items: center;">
+                    <span style="font-size: 0.75rem; color: #64748b; font-weight: 600;">Preset:</span>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySolarModalSplitRatio(0.5)">50% : 50%</button>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySolarModalSplitRatio(0.7)">70% : 30%</button>
+                    <button type="button" class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; cursor: pointer;" onclick="window.applySolarModalSplitRatio(0.8)">80% : 20%</button>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label>Jenis</label>
                 <select id="solar-type" class="form-control" required>
@@ -6245,7 +6993,7 @@ window.editSolar = (id) => {
             </div>
             <div class="form-group">
                 <label>Jumlah (Liter)</label>
-                <input type="number" id="solar-amount" class="form-control" step="0.01" value="${solar.amount}" required>
+                <input type="number" id="solar-amount" class="form-control" step="0.01" value="${solar.amount}" required oninput="if(document.getElementById('solar-split-box')?.style.display !== 'none') window.syncSolarModalSplitQuantities()">
             </div>
             <div class="form-group">
                 <label>Keterangan</label>
@@ -6266,10 +7014,78 @@ window.editSolar = (id) => {
 };
 
 window.saveSolar = async () => {
-    const id = document.getElementById('solar-id').value || generateId();
+    const id = document.getElementById('solar-id')?.value || generateId();
     const data = getData();
     
     if (!data.solar) data.solar = [];
+
+    const isSplitMode = document.getElementById('solar-split-box')?.style.display !== 'none' && document.getElementById('solar-supplier')?.value === '__SPLIT__';
+
+    if (isSplitMode) {
+        const date = document.getElementById('solar-date').value;
+        const type = document.getElementById('solar-type').value;
+        const totalAmount = parseFloat(document.getElementById('solar-amount').value) || 0;
+        const desc = document.getElementById('solar-description').value;
+
+        const sup1 = document.getElementById('solar-split-sup-1').value.trim().toUpperCase();
+        const sup2 = document.getElementById('solar-split-sup-2').value.trim().toUpperCase();
+        const qty1 = parseFloat(document.getElementById('solar-split-qty-1').value) || 0;
+        const qty2 = parseFloat(document.getElementById('solar-split-qty-2').value) || 0;
+
+        if (!sup1 || !sup2) {
+            showToast('Pilih kedua pemasok!', 'warning');
+            return;
+        }
+        if (qty1 <= 0 || qty2 <= 0) {
+            showToast('Jumlah liter untuk setiap pemasok harus lebih dari 0!', 'warning');
+            return;
+        }
+        if (Math.abs((qty1 + qty2) - totalAmount) > 0.05) {
+            showToast(`Total liter pembagian (${(qty1 + qty2).toLocaleString('id-ID')}) tidak sama dengan total volume (${totalAmount.toLocaleString('id-ID')})!`, 'warning');
+            return;
+        }
+
+        await window.saveSolarSupplierToDatabase(sup1);
+        await window.saveSolarSupplierToDatabase(sup2);
+
+        // Item 1
+        const solarItem1 = {
+            id,
+            date,
+            supplier: sup1,
+            type,
+            amount: qty1,
+            description: (desc || '').replace(/\s*\(Bagian \d\)/g, '') + ' (Bagian 1)',
+            created_at: new Date().toISOString()
+        };
+
+        const index = data.solar.findIndex(s => s.id === id);
+        if (index >= 0) {
+            data.solar[index] = solarItem1;
+        } else {
+            data.solar.push(solarItem1);
+        }
+        await saveData(data, 'solar', solarItem1);
+
+        // Item 2
+        const solarItem2 = {
+            id: generateId(),
+            date,
+            supplier: sup2,
+            type,
+            amount: qty2,
+            description: (desc || '').replace(/\s*\(Bagian \d\)/g, '') + ' (Bagian 2)',
+            created_at: new Date().toISOString()
+        };
+        data.solar.push(solarItem2);
+        await saveData(data, 'solar', solarItem2);
+
+        saveData(data);
+        closeModal();
+        if (window.render_solar) window.render_solar();
+        showToast(`✅ Berhasil menyimpan transaksi 2 pemasok: ${sup1} (${qty1.toLocaleString('id-ID')} L) & ${sup2} (${qty2.toLocaleString('id-ID')} L)!`, 'success');
+        return;
+    }
 
     const solarItem = {
         id,
@@ -6288,7 +7104,7 @@ window.saveSolar = async () => {
         data.solar.push(solarItem);
     }
 
-    if (solarItem.supplier) {
+    if (solarItem.supplier && solarItem.supplier !== '__SPLIT__' && solarItem.supplier !== '__NEW__') {
         await window.saveSolarSupplierToDatabase(solarItem.supplier);
     }
 
@@ -6296,6 +7112,7 @@ window.saveSolar = async () => {
     
     closeModal();
     if (window.render_solar) window.render_solar();
+    showToast('✅ Data solar berhasil disimpan!', 'success');
 };
 
 window.deleteSolar = async (id) => {
