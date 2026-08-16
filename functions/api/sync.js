@@ -48,12 +48,20 @@ export async function onRequestGet(context) {
                 created_at TEXT
             )
         `);
+        await client.execute(`
+            CREATE TABLE IF NOT EXISTS solar_overrides (
+                id TEXT PRIMARY KEY,
+                date TEXT,
+                supplier TEXT,
+                created_at TEXT
+            )
+        `);
     } catch (e) {
         console.error("Migration failed:", e);
     }
 
     try {
-        const [buyers, drivers, expenseTypes, settlements, deductions, transactions, profiles, solar, solarSuppliers] = await Promise.all([
+        const [buyers, drivers, expenseTypes, settlements, deductions, transactions, profiles, solar, solarSuppliers, solarOverrides] = await Promise.all([
             client.execute("SELECT * FROM buyers"),
             client.execute("SELECT * FROM drivers"),
             client.execute("SELECT * FROM expense_types"),
@@ -62,7 +70,8 @@ export async function onRequestGet(context) {
             client.execute("SELECT * FROM transactions"),
             client.execute("SELECT * FROM profiles"),
             client.execute("SELECT * FROM solar"),
-            client.execute("SELECT * FROM solar_suppliers")
+            client.execute("SELECT * FROM solar_suppliers"),
+            client.execute("SELECT * FROM solar_overrides")
         ]);
 
         return new Response(JSON.stringify({
@@ -74,7 +83,8 @@ export async function onRequestGet(context) {
             transactions: transactions.rows,
             profiles: profiles.rows,
             solar: solar.rows,
-            solarSuppliers: solarSuppliers ? solarSuppliers.rows : []
+            solarSuppliers: solarSuppliers ? solarSuppliers.rows : [],
+            solarOverrides: solarOverrides ? solarOverrides.rows : []
         }), {
             headers: { 'Content-Type': 'application/json' },
             status: 200

@@ -54,6 +54,7 @@ const defaultData = {
     profiles: [],
     solar: [],
     solarSuppliers: [],
+    solarDateOverrides: {},
     solarRowOverrides: {}
 };
 
@@ -84,6 +85,17 @@ async function fetchAllDataFromTurso() {
         if (!response.ok) throw new Error('Network response was not ok');
         const data = await response.json();
 
+        const solarDateOverrides = {};
+        const solarRowOverrides = {};
+        (data.solarOverrides || []).forEach(o => {
+            if (o.id && o.id.startsWith('row-')) {
+                const rowKey = o.id.replace('row-', '');
+                solarRowOverrides[rowKey] = o.supplier;
+            } else if (o.date && o.supplier) {
+                solarDateOverrides[o.date] = o.supplier;
+            }
+        });
+
         _cache = {
             buyers: (data.buyers || []).map(b => ({ ...b, unitPrice: b.unitprice })),
             drivers: (data.drivers || []).map(d => ({ ...d, vehicleNumber: d.vehiclenumber })),
@@ -102,7 +114,9 @@ async function fetchAllDataFromTurso() {
             })),
             profiles: (data.profiles || []).map(p => ({ ...p, fullName: p.full_name })),
             solar: data.solar || [],
-            solarSuppliers: data.solarSuppliers || []
+            solarSuppliers: data.solarSuppliers || [],
+            solarDateOverrides: solarDateOverrides,
+            solarRowOverrides: solarRowOverrides
         };
 
         // Seed default admin if totally empty
@@ -4698,14 +4712,30 @@ window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
         // Save override ONLY for this specific row ID
         if (!data.solarRowOverrides) data.solarRowOverrides = {};
         data.solarRowOverrides[id] = chosenSupplier;
-        saveData(data);
+        
+        const overrideItem = {
+            id: `row-${id}`,
+            date: date,
+            supplier: chosenSupplier,
+            created_at: new Date().toISOString()
+        };
+        await saveData(data, 'solar_overrides', overrideItem);
         render_solar();
     } else {
         if (!data.solar) data.solar = [];
         const index = data.solar.findIndex(s => s.id === id);
         if (index > -1) {
             data.solar[index].supplier = chosenSupplier;
-            const solarItem = data.solar[index];
+            const solarItem = {
+                id: data.solar[index].id,
+                date: data.solar[index].date,
+                type: data.solar[index].type,
+                amount: parseFloat(data.solar[index].amount) || 0,
+                description: data.solar[index].description || '',
+                supplier: chosenSupplier,
+                created_at: data.solar[index].created_at || new Date().toISOString()
+            };
+            data.solar[index] = solarItem;
             await saveData(data, 'solar', solarItem);
             render_solar();
         }
@@ -4923,37 +4953,59 @@ window.openBulkUpdateSolarSupplierModal = () => {
 
         const currentData = getData();
 
-        // 1. Update all manual solar items in range
+        // 1. Update all manual solar items in range & persist each to Turso
         if (currentData.solar) {
             for (let i = 0; i < currentData.solar.length; i++) {
                 const s = currentData.solar[i];
                 if (s.date >= startDate && s.date <= endDate) {
                     s.supplier = chosenSupplier;
-                    await saveData(currentData, 'solar', s);
+                    const cleanItem = {
+                        id: s.id,
+                        date: s.date,
+                        type: s.type,
+                        amount: parseFloat(s.amount) || 0,
+                        description: s.description || '',
+                        supplier: chosenSupplier,
+                        created_at: s.created_at || new Date().toISOString()
+                    };
+                    currentData.solar[i] = cleanItem;
+                    await saveData(currentData, 'solar', cleanItem);
                 }
             }
         }
 
-        // 2. Clear individual row overrides in range and set date overrides for the date range
+        // 2. Clear individual row overrides in range from database & memory
         if (!currentData.solarDateOverrides) currentData.solarDateOverrides = {};
         if (currentData.solarRowOverrides) {
+            const rowsToDelete = [];
             Object.keys(currentData.solarRowOverrides).forEach(rowId => {
                 const parts = rowId.split('-');
                 if (parts.length >= 4) {
                     const rowDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
                     if (rowDate >= startDate && rowDate <= endDate) {
+                        rowsToDelete.push(rowId);
                         delete currentData.solarRowOverrides[rowId];
                     }
                 }
             });
+            for (const rowId of rowsToDelete) {
+                await deleteFromDatabase('solar_overrides', `row-${rowId}`);
+            }
         }
 
-        // Apply date override for all days in range
+        // 3. Apply date override for all days in range & persist to Turso solar_overrides
         let cur = new Date(startDate);
         const end = new Date(endDate);
         while (cur <= end) {
             const dateStr = cur.toISOString().split('T')[0];
             currentData.solarDateOverrides[dateStr] = chosenSupplier;
+            const overrideItem = {
+                id: `date-${dateStr}`,
+                date: dateStr,
+                supplier: chosenSupplier,
+                created_at: new Date().toISOString()
+            };
+            await saveData(currentData, 'solar_overrides', overrideItem);
             cur.setDate(cur.getDate() + 1);
         }
 
