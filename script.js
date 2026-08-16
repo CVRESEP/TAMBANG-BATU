@@ -53,7 +53,8 @@ const defaultData = {
     transactions: [],
     profiles: [],
     solar: [],
-    solarSuppliers: []
+    solarSuppliers: [],
+    solarRowOverrides: {}
 };
 
 let _cache = null;
@@ -749,11 +750,20 @@ window.render_pengeluaran = () => {
 };
 
 // --- FIFO SOLAR CALCULATION ENGINE ---
+function getPertaminaDexSupplier(data) {
+    const suppliers = getAllSolarSuppliers(data);
+    const dex = suppliers.find(s => s.toUpperCase().includes('PERTAMINA DEX') || s.toUpperCase().includes('DEX'));
+    if (dex) return dex;
+    return 'PERTAMINA DEX';
+}
+
 function getCalculatedSolarRecords(data) {
     const expenseMap = {};
     (data.expenseTypes || []).forEach(e => {
         expenseMap[e.id] = e;
     });
+
+    const pertaminaDexSup = getPertaminaDexSupplier(data);
 
     // 1. Separate Masuk Batches (sorted chronologically)
     const masukBatches = (data.solar || [])
@@ -822,25 +832,12 @@ function getCalculatedSolarRecords(data) {
     const sortedUsageDates = Object.keys(dailyUsages).sort((a, b) => new Date(a) - new Date(b));
     const autoKeluar = [];
 
-    // 5. FIFO deduction across batches
+    // 5. FIFO deduction across batches (regular supplier stock will NOT go negative)
     sortedUsageDates.forEach(date => {
         const usage = dailyUsages[date];
         let needed = usage.qty;
         const expNamesStr = Array.from(usage.expNames).join(', ');
-
-        const dateOverride = (data.solarDateOverrides && data.solarDateOverrides[date]);
-        if (dateOverride) {
-            autoKeluar.push({
-                id: `auto-${date}-${dateOverride.trim().toUpperCase()}`,
-                date: date,
-                type: 'Keluar',
-                supplier: dateOverride.trim().toUpperCase(),
-                amount: needed,
-                description: `PEMAKAIAN HARIAN [${expNamesStr}]`,
-                isAuto: true
-            });
-            return;
-        }
+        let rowSeq = 0;
 
         // FIFO: Deduct from available batches with date <= usage date
         for (let i = 0; i < masukBatches.length && needed > 0; i++) {
@@ -849,12 +846,20 @@ function getCalculatedSolarRecords(data) {
                 const take = Math.min(needed, batch.remaining);
                 batch.remaining -= take;
                 needed -= take;
+                rowSeq++;
+
+                const rowId = `auto-${date}-${batch.id || ('batch_' + i)}-${rowSeq}`;
+                const supplier = (data.solarRowOverrides && data.solarRowOverrides[rowId])
+                    ? data.solarRowOverrides[rowId]
+                    : ((data.solarDateOverrides && data.solarDateOverrides[date])
+                        ? data.solarDateOverrides[date]
+                        : batch.supplier);
 
                 autoKeluar.push({
-                    id: `auto-${date}-${batch.supplier}-${batch.id || i}`,
+                    id: rowId,
                     date: date,
                     type: 'Keluar',
-                    supplier: batch.supplier,
+                    supplier: supplier,
                     amount: take,
                     description: `PEMAKAIAN HARIAN (FIFO) [${expNamesStr}]`,
                     isAuto: true
@@ -862,19 +867,27 @@ function getCalculatedSolarRecords(data) {
             }
         }
 
-        // If needed > 0, check any remaining batch (flexible)
+        // If needed > 0, check any remaining batches from other dates
         if (needed > 0) {
             for (let i = 0; i < masukBatches.length && needed > 0; i++) {
                 if (masukBatches[i].remaining > 0) {
                     const take = Math.min(needed, masukBatches[i].remaining);
                     masukBatches[i].remaining -= take;
                     needed -= take;
+                    rowSeq++;
+
+                    const rowId = `auto-${date}-${masukBatches[i].id || ('batch_' + i)}-${rowSeq}`;
+                    const supplier = (data.solarRowOverrides && data.solarRowOverrides[rowId])
+                        ? data.solarRowOverrides[rowId]
+                        : ((data.solarDateOverrides && data.solarDateOverrides[date])
+                            ? data.solarDateOverrides[date]
+                            : masukBatches[i].supplier);
 
                     autoKeluar.push({
-                        id: `auto-${date}-${masukBatches[i].supplier}-${masukBatches[i].id || i}`,
+                        id: rowId,
                         date: date,
                         type: 'Keluar',
-                        supplier: masukBatches[i].supplier,
+                        supplier: supplier,
                         amount: take,
                         description: `PEMAKAIAN HARIAN (FIFO) [${expNamesStr}]`,
                         isAuto: true
@@ -883,16 +896,23 @@ function getCalculatedSolarRecords(data) {
             }
         }
 
-        // If still needed > 0 (stock exhausted)
+        // If still needed > 0 (Stock exhausted -> Stok tidak boleh minus, alihkan ke PERTAMINA DEX)
         if (needed > 0) {
-            const defaultSup = getDefaultSolarSupplier(data) || 'INTERNAL';
+            rowSeq++;
+            const rowId = `auto-${date}-dex-${rowSeq}`;
+            const supplier = (data.solarRowOverrides && data.solarRowOverrides[rowId])
+                ? data.solarRowOverrides[rowId]
+                : ((data.solarDateOverrides && data.solarDateOverrides[date])
+                    ? data.solarDateOverrides[date]
+                    : pertaminaDexSup);
+
             autoKeluar.push({
-                id: `auto-${date}-${defaultSup}-def`,
+                id: rowId,
                 date: date,
                 type: 'Keluar',
-                supplier: defaultSup,
+                supplier: supplier,
                 amount: needed,
-                description: `PEMAKAIAN HARIAN [${expNamesStr}]`,
+                description: `PEMAKAIAN HARIAN (${pertaminaDexSup}) [${expNamesStr}]`,
                 isAuto: true
             });
         }
@@ -4645,6 +4665,11 @@ function getAllSolarSuppliers(data) {
             supSet.add(e.linkedSolarSupplier.trim().toUpperCase());
         }
     });
+    if (data.solarRowOverrides) {
+        Object.values(data.solarRowOverrides).forEach(sup => {
+            if (sup && sup.trim()) supSet.add(sup.trim().toUpperCase());
+        });
+    }
     if (data.solarDateOverrides) {
         Object.values(data.solarDateOverrides).forEach(sup => {
             if (sup && sup.trim()) supSet.add(sup.trim().toUpperCase());
@@ -4656,7 +4681,7 @@ function getAllSolarSuppliers(data) {
 window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
     let chosenSupplier = selectEl.value;
     if (chosenSupplier === '__NEW__') {
-        const input = prompt('Masukkan Nama Pemasok Solar Baru (Contoh: PT. PERTAMINA, MAS SEPTA, A):');
+        const input = prompt('Masukkan Nama Pemasok Solar Baru (Contoh: PT. PERTAMINA, MAS SEPTA, PERTAMINA DEX):');
         if (!input || !input.trim()) {
             selectEl.value = selectEl.getAttribute('data-prev-val') || '';
             return;
@@ -4670,32 +4695,11 @@ window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
     const data = getData();
 
     if (isAuto) {
-        if (!data.solarDateOverrides) data.solarDateOverrides = {};
-        data.solarDateOverrides[date] = chosenSupplier;
-
-        // Also update linked supplier on solar expenses
-        const solarExps = (data.expenseTypes || []).filter(e => 
-            (e.name && e.name.toUpperCase().includes('SOLAR')) || e.linkedSolarSupplier
-        );
-        for (const exp of solarExps) {
-            exp.linkedSolarSupplier = chosenSupplier;
-            const supabaseItem = {
-                id: exp.id,
-                name: exp.name,
-                category: exp.category,
-                nature: exp.nature,
-                unit: exp.unit,
-                baseprice: exp.basePrice,
-                sort_order: exp.order,
-                linked_buyer_id: exp.linkedBuyerId,
-                linked_solar_supplier: exp.linkedSolarSupplier
-            };
-            await saveData(data, 'expense_types', supabaseItem);
-        }
-
+        // Save override ONLY for this specific row ID
+        if (!data.solarRowOverrides) data.solarRowOverrides = {};
+        data.solarRowOverrides[id] = chosenSupplier;
         saveData(data);
         render_solar();
-        if (window.render_pengeluaran) window.render_pengeluaran();
     } else {
         if (!data.solar) data.solar = [];
         const index = data.solar.findIndex(s => s.id === id);
@@ -4704,7 +4708,6 @@ window.handleTableSolarSupplierChange = async (selectEl, id, isAuto, date) => {
             const solarItem = data.solar[index];
             await saveData(data, 'solar', solarItem);
             render_solar();
-            if (window.render_pengeluaran) window.render_pengeluaran();
         }
     }
 };
