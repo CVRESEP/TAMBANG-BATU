@@ -28,5 +28,6 @@ dist/
 build/
 *.xlsx
 *.xls
+*.pdf
 .wrangler/
 

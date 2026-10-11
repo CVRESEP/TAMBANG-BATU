@@ -1,33 +1,24 @@
 <!-- Bulk Delete Feature Added -->
 <html lang="id">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web Penjualan Tambang Batu</title>
     <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Icons -->
-    <link
-        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
-        rel="stylesheet" />
+    <link         href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"         rel="stylesheet" />
     <!-- SheetJS for Excel import/export -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- PDF Generation Libraries -->
+    <script src="html2canvas.min.js"></script><script src="jspdf.umd.min.js"></script><script src="html2pdf.bundle.min.js"></script>
+    <script> if (typeof html2canvas === 'undefined') { document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"><\/script>'); } if (typeof jspdf === 'undefined') { document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"><\/script>'); } if (typeof html2pdf === 'undefined') { document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"><\/script>'); } </script>
     <!-- Styles -->
     <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
     <!-- Loading overlay -->
-    <div id="loading-overlay"
-        style="position:fixed;inset:0;background:rgba(15,23,42,0.75);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;">
-        <div
-            style="width:48px;height:48px;border:4px solid rgba(255,255,255,0.2);border-top-color:#10b981;border-radius:50%;animation:spin 0.8s linear infinite;">
-        </div>
-        <p style="color:#fff;font-family:Inter,sans-serif;font-size:1rem;margin:0;">Memuat data...</p>
-    </div>
+    <div id="loading-overlay"         style="position:fixed;inset:0;background:rgba(15,23,42,0.75);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;"> <div             style="width:48px;height:48px;border:4px solid rgba(255,255,255,0.2);border-top-color:#10b981;border-radius:50%;animation:spin 0.8s linear infinite;"> </div> <p style="color:#fff;font-family:Inter,sans-serif;font-size:1rem;margin:0;">Memuat data...</p> </div>
     <style>
         @keyframes spin {
             to {
@@ -35,110 +26,57 @@
             }
         }
     </style>
-
     <!-- Login Page -->
     <div id="login-page" class="login-page">
-        <div class="login-bg-shapes">
-            <div class="shape shape-1"></div>
-            <div class="shape shape-2"></div>
-        </div>
+        <div class="login-bg-shapes"><div class="shape shape-1"></div><div class="shape shape-2"></div></div>
         <div class="login-container">
             <div class="login-card">
-                <div class="login-header">
-                    <span class="material-symbols-outlined logo-icon">diamond</span>
-                    <h2>CV. RESEP</h2>
-                    <p>Mining & Settlement Management</p>
-                </div>
+                <div class="login-header"><span class="material-symbols-outlined logo-icon">diamond</span><h2>CV. RESEP</h2><p>Mining & Settlement Management</p></div>
                 <form id="login-form">
-                    <div class="form-group">
-                        <label for="login-username">Username</label>
-                        <div class="input-with-icon">
-                            <span class="material-symbols-outlined">person</span>
-                            <input type="text" id="login-username" placeholder="Username" required>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="login-password">Password</label>
-                        <div class="input-with-icon">
-                            <span class="material-symbols-outlined">lock</span>
-                            <input type="password" id="login-password" placeholder="••••••••" required>
-                        </div>
-                    </div>
+                    <div class="form-group"><label for="login-username">Username</label><div class="input-with-icon"><span class="material-symbols-outlined">person</span><input type="text" id="login-username" placeholder="Username" required></div></div>
+                    <div class="form-group"><label for="login-password">Password</label><div class="input-with-icon"><span class="material-symbols-outlined">lock</span><input type="password" id="login-password" placeholder="••••••••" required></div></div>
                     <button type="submit" class="btn btn-login" id="btn-login">
                         <span>Sign In</span>
                         <span class="material-symbols-outlined">login</span>
                     </button>
                     <div id="login-error" class="login-error"></div>
                 </form>
-            </div>
-        </div>
+            </div></div>
     </div>
-
     <div class="app-container" id="main-app" style="display: none;">
         <div class="sidebar-overlay" id="sidebar-overlay"></div>
         <!-- Sidebar -->
         <aside class="sidebar">
-            <div class="sidebar-header">
-                <span class="material-symbols-outlined logo-icon">diamond</span>
-                <h2>CV. RESEP</h2>
-            </div>
+            <div class="sidebar-header"><span class="material-symbols-outlined logo-icon">diamond</span><h2>CV. RESEP</h2></div>
             <nav class="sidebar-nav">
-                <a href="#" class="nav-link active" data-target="dashboard">
-                    <span class="material-symbols-outlined">dashboard</span>
-                    Dashboard
+                <a href="#" class="nav-link active" data-target="dashboard"><span class="material-symbols-outlined">dashboard</span> Dashboard
                 </a>
-                <a href="#" class="nav-link" data-target="penjualan">
-                    <span class="material-symbols-outlined">add_shopping_cart</span>
-                    Penjualan
+                <a href="#" class="nav-link" data-target="penjualan"><span class="material-symbols-outlined">add_shopping_cart</span> Penjualan
                 </a>
-                <a href="#" class="nav-link" data-target="pembeli">
-                    <span class="material-symbols-outlined">groups</span>
-                    Daftar Pembeli
+                <a href="#" class="nav-link" data-target="pembeli"><span class="material-symbols-outlined">groups</span> Daftar Pembeli
                 </a>
-                <a href="#" class="nav-link" data-target="sopir">
-                    <span class="material-symbols-outlined">local_shipping</span>
-                    Daftar Sopir
+                <a href="#" class="nav-link" data-target="sopir"><span class="material-symbols-outlined">local_shipping</span> Daftar Sopir
                 </a>
-                <a href="#" class="nav-link" data-target="pengeluaran">
-                    <span class="material-symbols-outlined">receipt_long</span>
-                    Jenis Pengeluaran
+                <a href="#" class="nav-link" data-target="pengeluaran"><span class="material-symbols-outlined">receipt_long</span> Jenis Pengeluaran
                 </a>
-                <a href="#" class="nav-link" data-target="solar">
-                    <span class="material-symbols-outlined">local_gas_station</span>
-                    Perhitungan Solar
+                <a href="#" class="nav-link" data-target="solar"><span class="material-symbols-outlined">local_gas_station</span> Perhitungan Solar
                 </a>
-                <a href="#" class="nav-link" data-target="penagihan">
-                    <span class="material-symbols-outlined">payments</span>
-                    Penagihan
+                <a href="#" class="nav-link" data-target="penagihan"><span class="material-symbols-outlined">payments</span> Penagihan
                 </a>
-                <a href="#" class="nav-link" data-target="potongan">
-                    <span class="material-symbols-outlined">content_cut</span>
-                    Daftar Potongan
+                <a href="#" class="nav-link" data-target="potongan"><span class="material-symbols-outlined">content_cut</span> Daftar Potongan
                 </a>
-                <a href="#" class="nav-link" data-target="laporan">
-                    <span class="material-symbols-outlined">bar_chart</span>
-                    Laporan Mingguan
+                <a href="#" class="nav-link" data-target="laporan"><span class="material-symbols-outlined">bar_chart</span> Laporan Mingguan
                 </a>
-                <a href="#" class="nav-link" data-target="users" id="nav-users">
-                    <span class="material-symbols-outlined">manage_accounts</span>
-                    Manajemen Akun
+                <a href="#" class="nav-link" data-target="users"><span class="material-symbols-outlined">manage_accounts</span> Manajemen Akun
                 </a>
-                <div style="margin-top: auto; padding: 1rem 1.5rem;">
-                    <button class="btn btn-danger" style="width: 100%; justify-content: center; gap: 0.5rem;" onclick="logout()">
-                        <span class="material-symbols-outlined">logout</span>
-                        Keluar
-                    </button>
-                </div>
+                <div style="margin-top: auto; padding: 1rem 1.5rem;"><button class="btn btn-danger" style="width: 100%; justify-content: center; gap: 0.5rem;" onclick="logout()"><span class="material-symbols-outlined">logout</span> Keluar</button></div>
             </nav>
         </aside>
-
         <!-- Main Content -->
         <main class="main-content">
             <header class="top-header">
                 <div class="header-left d-flex align-center" style="gap: 1rem;">
-                    <button class="btn-icon mobile-only" id="btn-toggle-sidebar" style="display: none;">
-                        <span class="material-symbols-outlined">menu</span>
-                    </button>
+                    <button class="btn-icon mobile-only" id="btn-toggle-sidebar" style="display: none;"><span class="material-symbols-outlined">menu</span>  </button>
                     <h1 id="page-title">Dashboard</h1>
                 </div>
                 <div class="header-right">
@@ -146,10 +84,8 @@
                     <div class="user-profile">
                         <span class="material-symbols-outlined">account_circle</span>
                         <span id="header-user-name">Loading...</span>
-                    </div>
-                </div>
+                    </div></div>
             </header>
-
             <div class="page-container">
                 <!-- Dashboard Page -->
                 <section id="dashboard" class="page active">
@@ -160,48 +96,33 @@
                             <div class="stat-details">
                                 <h3>Total Pemasukan Kotor</h3>
                                 <p id="stat-sales">Rp 0</p>
-                            </div>
-                        </div>
+                            </div></div>
                         <div class="stat-card">
                             <div class="stat-icon expense"><span class="material-symbols-outlined">trending_down</span>
                             </div>
                             <div class="stat-details">
                                 <h3>Total Pengeluaran</h3>
                                 <p id="stat-expense">Rp 0</p>
-                            </div>
-                        </div>
+                            </div></div>
                         <div class="stat-card">
                             <div class="stat-icon neutral"><span class="material-symbols-outlined">groups</span></div>
                             <div class="stat-details">
                                 <h3>Data Pembeli</h3>
                                 <p id="stat-buyers">0</p>
-                            </div>
-                        </div>
+                            </div></div>
                         <div class="stat-card">
                             <div class="stat-icon neutral"><span class="material-symbols-outlined">local_shipping</span>
                             </div>
                             <div class="stat-details">
                                 <h3>Data Sopir</h3>
                                 <p id="stat-drivers">0</p>
-                            </div>
-                        </div>
+                            </div></div>
                     </div>
                     <div class="recent-transactions mt-4">
-                        <div class="card">
-                            <div class="card-header">
-                                <h2>Transaksi Penjualan Terbaru</h2>
-                            </div>
-                            <div class="card-body">
-                                <div class="table-responsive">
+                        <div class="card"><div class="card-header"><h2>Transaksi Penjualan Terbaru</h2></div><div class="card-body"><div class="table-responsive">
                                     <table class="table" id="table-recent">
                                         <thead>
-                                            <tr>
-                                                <th>Tanggal</th>
-                                                <th>Pembeli</th>
-                                                <th>Sopir</th>
-                                                <th>Total</th>
-                                                <th>Status</th>
-                                            </tr>
+                                            <tr><th>Tanggal</th><th>Pembeli</th><th>Sopir</th><th>Total</th><th>Status</th></tr>
                                         </thead>
                                         <tbody id="tbody-recent">
                                             <tr>
@@ -209,12 +130,7 @@
                                             </tr>
                                         </tbody>
                                     </table>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
+                                </div></div></div></div></section>
                 <!-- Penjualan Page -->
                 <section id="penjualan" class="page">
                     <!-- List View -->
@@ -222,43 +138,27 @@
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Penjualan</h2>
                             <div class="d-flex" style="gap:0.5rem; align-items:center">
-                                <button class="btn" onclick="exportPenjualanExcel()"
-                                    style="background:#10b981; color:white; font-size:0.85rem;">
-                                    <span class="material-symbols-outlined" style="font-size:18px">download</span>
-                                    Export Excel
+                                <button class="btn" onclick="exportPenjualanExcel()"                                     style="background:#10b981; color:white; font-size:0.85rem;"><span class="material-symbols-outlined" style="font-size:18px">download</span> Export Excel
                                 </button>
-                                <button class="btn" onclick="downloadPenjualanTemplate()" style="background:#6366f1; color:white; font-size:0.85rem;">
-                                    <span class="material-symbols-outlined" style="font-size:18px">description</span> Template Import
+                                <button class="btn" onclick="downloadPenjualanTemplate()" style="background:#6366f1; color:white; font-size:0.85rem;"><span class="material-symbols-outlined" style="font-size:18px">description</span> Template Import
                                 </button>
-                                <button class="btn" onclick="document.getElementById('import-excel-input').click()"
-                                    style="background:#f59e0b; color:white; font-size:0.85rem;">
-                                    <span class="material-symbols-outlined" style="font-size:18px">upload</span> Import
+                                <button class="btn" onclick="document.getElementById('import-excel-input').click()"                                     style="background:#f59e0b; color:white; font-size:0.85rem;"><span class="material-symbols-outlined" style="font-size:18px">upload</span> Import
                                     Excel
                                 </button>
-                                <input type="file" id="import-excel-input" accept=".xlsx,.xls" style="display:none"
-                                    onchange="importPenjualanExcel(this)">
-                                <button class="btn btn-danger" id="btn-bulk-delete-penjualan" style="display:none">
-                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus Terpilih
+                                <input type="file" id="import-excel-input" accept=".xlsx,.xls" style="display:none"                                     onchange="importPenjualanExcel(this)">
+                                <button class="btn btn-danger" id="btn-bulk-delete-penjualan" style="display:none"><span class="material-symbols-outlined">delete_sweep</span> Hapus Terpilih
                                 </button>
-                                <button class="btn btn-primary" id="btn-show-add-penjualan">
-                                    <span class="material-symbols-outlined">add</span> Tambah Penjualan
+                                <button class="btn btn-primary" id="btn-show-add-penjualan"><span class="material-symbols-outlined">add</span> Tambah Penjualan
                                 </button>
-                            </div>
-                        </div>
-                        <div class="card-body">
+                            </div></div><div class="card-body">
                             <div class="d-flex" style="gap:1rem; margin-bottom: 1rem; align-items:center; background: #f8fafc; padding: 0.75rem; border-radius: 0.5rem; border: 1px solid #e2e8f0; justify-content: space-between;">
                                 <div class="d-flex" style="gap:1rem; align-items:center;">
                                     <div style="font-weight: 600; font-size: 0.85rem; color: #475569;"><span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle;">calendar_month</span> Filter Minggu:</div>
                                     <div class="d-flex" style="gap:0.25rem; align-items:center;">
-                                        <button class="btn-icon" id="btn-prev-week" style="padding: 0.25rem; background: white; border: 1px solid #cbd5e1; border-radius: 0.25rem; display:flex; align-items:center; cursor:pointer;" onclick="shiftWeek(-1)" title="Minggu Sebelumnya">
-                                            <span class="material-symbols-outlined" style="font-size: 18px;">chevron_left</span>
-                                        </button>
+                                        <button class="btn-icon" id="btn-prev-week" style="padding: 0.25rem; background: white; border: 1px solid #cbd5e1; border-radius: 0.25rem; display:flex; align-items:center; cursor:pointer;" onclick="shiftWeek(-1)" title="Minggu Sebelumnya"><span class="material-symbols-outlined" style="font-size: 18px;">chevron_left</span>  </button>
                                         <select id="penjualan-week-filter" class="form-control" style="width: auto; max-width: 300px; padding: 0.25rem 0.5rem; margin: 0;" onchange="render_penjualan()"></select>
-                                        <button class="btn-icon" id="btn-next-week" style="padding: 0.25rem; background: white; border: 1px solid #cbd5e1; border-radius: 0.25rem; display:flex; align-items:center; cursor:pointer;" onclick="shiftWeek(1)" title="Minggu Selanjutnya">
-                                            <span class="material-symbols-outlined" style="font-size: 18px;">chevron_right</span>
-                                        </button>
-                                    </div>
-                                </div>
+                                        <button class="btn-icon" id="btn-next-week" style="padding: 0.25rem; background: white; border: 1px solid #cbd5e1; border-radius: 0.25rem; display:flex; align-items:center; cursor:pointer;" onclick="shiftWeek(1)" title="Minggu Selanjutnya"><span class="material-symbols-outlined" style="font-size: 18px;">chevron_right</span>  </button>
+                                    </div></div>
                             </div>
                             <div class="table-responsive">
                                 <table class="table" id="table-penjualan-list">
@@ -273,46 +173,29 @@
                                             <th>Net Profit</th>
                                             <th>Aksi</th>
                                         </tr>
-                                    </thead>
-                                    <tbody id="tbody-penjualan-list">
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
+                                    </thead><tbody id="tbody-penjualan-list"></tbody></table></div></div>
                     </div>
-
                     <!-- Form View (Hidden by default) -->
                     <div id="penjualan-form-view" style="display: none;">
                         <div class="d-flex justify-between align-center" style="margin-bottom: 1.5rem;">
                             <h2 style="font-size: 1.5rem; font-weight: 600;">Tambah Data Penjualan</h2>
-                            <button class="btn" id="btn-back-penjualan"
-                                style="background: white; border: 1px solid var(--border-color); color: var(--text-primary);">
-                                <span class="material-symbols-outlined">arrow_back</span> Kembali
+                            <button class="btn" id="btn-back-penjualan"                                 style="background: white; border: 1px solid var(--border-color); color: var(--text-primary);"><span class="material-symbols-outlined">arrow_back</span> Kembali
                             </button>
                         </div>
-
                         <div id="penjualan-form-container">
                             <!-- Injected via JS -->
-                        </div>
-                    </div>
-                </section>
-
+                        </div></div></section>
                 <!-- Daftar Pembeli Page -->
                 <section id="pembeli" class="page">
                     <div class="card">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Pembeli</h2>
                             <div class="d-flex" style="gap:0.5rem">
-                                <button class="btn btn-danger" id="btn-bulk-delete-pembeli" style="display:none">
-                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                <button class="btn btn-danger" id="btn-bulk-delete-pembeli" style="display:none"><span class="material-symbols-outlined">delete_sweep</span> Hapus
                                 </button>
-                                <button class="btn btn-primary" id="btn-add-pembeli">
-                                    <span class="material-symbols-outlined">add</span> Tambah Pembeli
+                                <button class="btn btn-primary" id="btn-add-pembeli"><span class="material-symbols-outlined">add</span> Tambah Pembeli
                                 </button>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
+                            </div></div><div class="card-body"><div class="table-responsive">
                                 <table class="table" id="table-pembeli">
                                     <thead>
                                         <tr>
@@ -329,27 +212,18 @@
                                         <!-- Data will be injected here -->
                                     </tbody>
                                 </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
+                            </div></div></div></section>
                 <!-- Daftar Sopir Page -->
                 <section id="sopir" class="page">
                     <div class="card">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Sopir</h2>
                             <div class="d-flex" style="gap:0.5rem">
-                                <button class="btn btn-danger" id="btn-bulk-delete-sopir" style="display:none">
-                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                <button class="btn btn-danger" id="btn-bulk-delete-sopir" style="display:none"><span class="material-symbols-outlined">delete_sweep</span> Hapus
                                 </button>
-                                <button class="btn btn-primary" id="btn-add-sopir">
-                                    <span class="material-symbols-outlined">add</span> Tambah Sopir
+                                <button class="btn btn-primary" id="btn-add-sopir"><span class="material-symbols-outlined">add</span> Tambah Sopir
                                 </button>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
+                            </div></div><div class="card-body"><div class="table-responsive">
                                 <table class="table" id="table-sopir">
                                     <thead>
                                         <tr>
@@ -359,31 +233,18 @@
                                             <th>No. HP</th>
                                             <th>Aksi</th>
                                         </tr>
-                                    </thead>
-                                    <tbody id="tbody-sopir">
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
+                                    </thead><tbody id="tbody-sopir"></tbody></table></div></div></div></section>
                 <!-- Jenis Pengeluaran Page -->
                 <section id="pengeluaran" class="page">
                     <div class="card">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Jenis Pengeluaran</h2>
                             <div class="d-flex" style="gap:0.5rem">
-                                <button class="btn btn-danger" id="btn-bulk-delete-pengeluaran" style="display:none">
-                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                <button class="btn btn-danger" id="btn-bulk-delete-pengeluaran" style="display:none"><span class="material-symbols-outlined">delete_sweep</span> Hapus
                                 </button>
-                                <button class="btn btn-primary" id="btn-add-pengeluaran">
-                                    <span class="material-symbols-outlined">add</span> Tambah Pengeluaran
+                                <button class="btn btn-primary" id="btn-add-pengeluaran"><span class="material-symbols-outlined">add</span> Tambah Pengeluaran
                                 </button>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
+                            </div></div><div class="card-body"><div class="table-responsive">
                                 <table class="table" id="table-pengeluaran">
                                     <thead>
                                         <tr>
@@ -398,51 +259,32 @@
                                             <th>Koneksi Solar</th>
                                             <th>Aksi</th>
                                         </tr>
-                                    </thead>
-                                    <tbody id="tbody-pengeluaran">
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
+                                    </thead><tbody id="tbody-pengeluaran"></tbody></table></div></div></div></section>
                 <!-- Potongan Page -->
                 <section id="potongan" class="page">
-                    <div class="card" id="card-setoran-summary"
-                        style="margin-bottom: 2rem; background: #f8fafc; border: 1px solid #e2e8f0;">
+                    <div class="card" id="card-setoran-summary"                         style="margin-bottom: 2rem; background: #f8fafc; border: 1px solid #e2e8f0;">
                         <div class="card-header" style="border-bottom: 1px dashed #e2e8f0;">
                             <h2 style="font-size: 1rem; color: #475569;">Ringkasan Setoran</h2>
                         </div>
                         <div class="card-body" id="setoran-summary-content" style="padding: 1rem;">
                             <!-- Will be populated by JS -->
-                            <div class="text-center text-muted">Memuat ringkasan...</div>
-                        </div>
+                            <div class="text-center text-muted">Memuat ringkasan...</div></div>
                     </div>
-
                     <div class="card" style="margin-bottom: 2rem;">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Setoran</h2>
                             <div class="form-group" style="margin:0; display:flex; align-items:center; gap:0.5rem">
                                 <label style="font-size:0.8rem; margin:0; white-space:nowrap">Jenis:</label>
-                                <select id="filter-setoran-type" class="form-control"
-                                    style="padding: 0.25rem 0.5rem; width:150px">
+                                <select id="filter-setoran-type" class="form-control"                                     style="padding: 0.25rem 0.5rem; width:150px">
                                     <option value="">Semua</option>
                                 </select>
                             </div>
-                            
                             <div class="d-flex" style="gap:0.5rem">
-                                <button class="btn btn-danger" id="btn-bulk-delete-setoran" style="display:none">
-                                    <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                <button class="btn btn-danger" id="btn-bulk-delete-setoran" style="display:none"><span class="material-symbols-outlined">delete_sweep</span> Hapus
                                 </button>
-                                <button class="btn btn-primary" id="btn-add-setoran"
-                                    style="background: var(--secondary-color)">
-                                    <span class="material-symbols-outlined">add</span> Tambah Setoran
+                                <button class="btn btn-primary" id="btn-add-setoran"                                     style="background: var(--secondary-color)"><span class="material-symbols-outlined">add</span> Tambah Setoran
                                 </button>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
+                            </div></div><div class="card-body"><div class="table-responsive">
                                 <table class="table" id="table-setoran">
                                     <thead>
                                         <tr>
@@ -450,43 +292,29 @@
                                             <th>Jenis Setoran</th>
                                             <th>Aksi</th>
                                         </tr>
-                                    </thead>
-                                    <tbody id="tbody-setoran"></tbody>
-                                </table>
-                            </div>
-                        </div>
+                                    </thead><tbody id="tbody-setoran"></tbody></table></div></div>
                     </div>
-
                     <div class="card">
                         <div class="card-header d-flex justify-between align-center">
                             <h2>Daftar Potongan</h2>
                             <div class="d-flex" style="gap: 1rem; align-items: center;">
                             <div class="form-group" style="margin:0; display:flex; align-items:center; gap:0.5rem">
                                 <label style="font-size:0.8rem; margin:0; white-space:nowrap">Dari:</label>
-                                <input type="date" id="filter-potongan-start" class="form-control"
-                                    style="padding: 0.25rem 0.5rem; width:130px" onchange="render_potongan()">
+                                <input type="date" id="filter-potongan-start" class="form-control"                                     style="padding: 0.25rem 0.5rem; width:130px" onchange="render_potongan()">
                             </div>
                             <div class="form-group" style="margin:0; display:flex; align-items:center; gap:0.5rem">
                                 <label style="font-size:0.8rem; margin:0; white-space:nowrap">Sampai:</label>
-                                <input type="date" id="filter-potongan-end" class="form-control"
-                                    style="padding: 0.25rem 0.5rem; width:130px" onchange="render_potongan()">
+                                <input type="date" id="filter-potongan-end" class="form-control"                                     style="padding: 0.25rem 0.5rem; width:130px" onchange="render_potongan()">
                             </div>
-                                <button class="btn btn-primary" id="btn-add-setoran-2"
-                                    style="background:var(--secondary-color)">
-                                    <span class="material-symbols-outlined">add</span> Tambah Setoran
+                                <button class="btn btn-primary" id="btn-add-setoran-2"                                     style="background:var(--secondary-color)"><span class="material-symbols-outlined">add</span> Tambah Setoran
                                 </button>
                                 <div class="d-flex" style="gap:0.5rem">
-                                    <button class="btn btn-danger" id="btn-bulk-delete-potongan" style="display:none">
-                                        <span class="material-symbols-outlined">delete_sweep</span> Hapus
+                                    <button class="btn btn-danger" id="btn-bulk-delete-potongan" style="display:none"><span class="material-symbols-outlined">delete_sweep</span> Hapus
                                     </button>
-                                    <button class="btn btn-primary" id="btn-add-potongan">
-                                        <span class="material-symbols-outlined">add</span> Tambah Potongan
+                                    <button class="btn btn-primary" id="btn-add-potongan"><span class="material-symbols-outlined">add</span> Tambah Potongan
                                     </button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
+                                </div></div>
+                        </div><div class="card-body"><div class="table-responsive">
                                 <table class="table" id="table-potongan">
                                     <thead>
                                         <tr>
@@ -498,14 +326,7 @@
                                             <th>Jumlah</th>
                                             <th>Aksi</th>
                                         </tr>
-                                    </thead>
-                                    <tbody id="tbody-potongan">
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
+                                    </thead><tbody id="tbody-potongan"></tbody></table></div></div></div></section>
                 <!-- Solar Page -->
                 <section id="solar" class="page">
                     <div class="card">
@@ -530,46 +351,27 @@
                                         <select id="filter-solar-supplier" class="form-control" style="padding: 0.35rem 0.5rem; font-size: 0.85rem; width: auto;" onchange="render_solar()">
                                             <option value="">Semua Pemasok</option>
                                         </select>
-                                    </div>
-                                </div>
+                                    </div></div>
                             </div>
                             <div class="d-flex align-center" style="gap: 0.5rem; flex-wrap: wrap;">
-                                <button class="btn" style="background: #0284c7; color: white;" onclick="openBulkUpdateSolarSupplierModal()" title="Ubah pemasok sekaligus berdasarkan rentang tanggal">
-                                    <span class="material-symbols-outlined">edit_calendar</span> Ubah Pemasok Massal
+                                <button class="btn" style="background: #0284c7; color: white;" onclick="openBulkUpdateSolarSupplierModal()" title="Ubah pemasok sekaligus berdasarkan rentang tanggal"><span class="material-symbols-outlined">edit_calendar</span> Ubah Pemasok Massal
                                 </button>
-                                <button class="btn" style="background: #10b981; color: white;" onclick="printRekapSolar()">
-                                    <span class="material-symbols-outlined">print</span> Cetak Rekap
+                                <button class="btn" style="background: #0284c7; color: white;" onclick="exportRekapSolarPDF()" title="Langsung unduh Rekapitulasi Solar sebagai file PDF"><span class="material-symbols-outlined">download</span> Ekspor PDF
                                 </button>
-                                <button class="btn" style="background: #6366f1; color: white;" onclick="openAddSolarSupplierModal()">
-                                    <span class="material-symbols-outlined">person_add</span> Tambah Pemasok
+                                <button class="btn" style="background: #10b981; color: white;" onclick="printRekapSolar()" title="Buka jendela cetak / pratinjau"><span class="material-symbols-outlined">print</span> Cetak Rekap
                                 </button>
-                                <button class="btn btn-primary" onclick="openAddSolarModal()">
-                                    <span class="material-symbols-outlined">add</span> Tambah Data Solar
+                                <button class="btn" style="background: #6366f1; color: white;" onclick="openAddSolarSupplierModal()"><span class="material-symbols-outlined">person_add</span> Tambah Pemasok
                                 </button>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
-                                <table class="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Tanggal</th>
-                                            <th>Pemasok</th>
-                                            <th>Jenis (Masuk/Keluar)</th>
-                                            <th>Jumlah (Liter)</th>
-                                            <th>Keterangan</th>
-                                            <th style="width: 100px; text-align: center;">Aksi</th>
-                                        </tr>
+                                <button class="btn btn-primary" onclick="openAddSolarModal()"><span class="material-symbols-outlined">add</span> Tambah Data Solar
+                                </button>
+                            </div></div><div class="card-body"><div class="table-responsive"><table class="table"><thead>
+                                        <tr><th>Tanggal</th><th>Pemasok</th><th>Jenis (Masuk/Keluar)</th><th>Jumlah (Liter)</th><th>Keterangan</th><th style="width: 100px; text-align: center;">Aksi</th></tr>
                                     </thead>
                                     <tbody id="tbody-solar">
                                         <!-- Solar data will be injected here -->
                                     </tbody>
                                 </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
+                            </div></div></div></section>
                 <!-- Penagihan Page -->
                 <section id="penagihan" class="page">
                     <div class="card">
@@ -611,29 +413,20 @@
                                         <option value="Sebagian">Sebagian (Kurang Bayar)</option>
                                         <option value="Lunas">Lunas</option>
                                     </select>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card-body">
+                                </div></div>
+                        </div><div class="card-body">
                             <div id="penagihan-content">
                                 <p class="text-center text-muted" style="padding: 2rem;">Memuat data penagihan...</p>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
+                            </div></div></div></section>
                 <!-- Laporan Page -->
                 <section id="laporan" class="page">
                     <div class="card" style="margin-bottom: 2rem;">
-                        <div class="card-header">
-                            <h2 style="font-size: 1rem; color:#475569">Tambah Cepat (Periode Ini)</h2>
-                        </div>
+                        <div class="card-header"><h2 style="font-size: 1rem; color:#475569">Tambah Cepat (Periode Ini)</h2></div>
                         <div class="card-body" style="padding: 1rem;">
                             <div class="d-flex" style="gap: 1rem; flex-wrap: wrap;">
                                 <!-- Setoran Cepat -->
                                 <div class="card" style="flex: 1; min-width: 280px; border: 1px solid #10b981; background: #f0fdf4;">
-                                    <div class="card-header"
-                                        style="padding: 0.75rem 1rem; border-bottom: 1px solid #d1fae5;">
+                                    <div class="card-header"                                         style="padding: 0.75rem 1rem; border-bottom: 1px solid #d1fae5;">
                                         <h3 style="font-size: 0.9rem; color: #065f46; margin: 0;">Tambah Setoran Otomatis
                                             (Dari Penjualan)</h3>
                                     </div>
@@ -642,27 +435,20 @@
                                             <div class="form-group" style="margin: 0; flex: 1;">
                                                 <label style="font-size: 0.75rem; font-weight: 600; color: #065f46;">Pilih
                                                     Jenis Setoran</label>
-                                                <select id="report-setoran-type" class="form-control"
-                                                    style="font-size: 0.85rem; padding: 0.4rem; cursor: pointer;">
+                                                <select id="report-setoran-type" class="form-control"                                                     style="font-size: 0.85rem; padding: 0.4rem; cursor: pointer;">
                                                     <option value="">-- Pilih --</option>
                                                 </select>
                                             </div>
-                                            <button class="btn btn-primary" onclick="addQuickSetoran()"
-                                                style="background: #10b981; height: 34px;">
-                                                <span class="material-symbols-outlined" style="font-size: 18px;">add</span>
-                                                Daftarkan
+                                            <button class="btn btn-primary" onclick="addQuickSetoran()"                                                 style="background: #10b981; height: 34px;"><span class="material-symbols-outlined" style="font-size: 18px;">add</span> Daftarkan
                                             </button>
                                         </div>
-                                        <p
-                                            style="font-size: 0.7rem; color: #059669; margin-top: 0.5rem; font-style: italic;">
+                                        <p                                             style="font-size: 0.7rem; color: #059669; margin-top: 0.5rem; font-style: italic;">
                                             * Nilai setoran dihitung otomatis dari penjualan harian sesuai tanggal laporan.
                                         </p>
-                                    </div>
-                                </div>
+                                    </div></div>
                                 <!-- Potongan Cepat -->
                                 <div class="card" style="flex: 1; min-width: 280px; border: 1px solid #f43f5e; background: #fff1f2;">
-                                    <div class="card-header"
-                                        style="padding: 0.75rem 1rem; border-bottom: 1px solid #fecdd3;">
+                                    <div class="card-header"                                         style="padding: 0.75rem 1rem; border-bottom: 1px solid #fecdd3;">
                                         <h3 style="font-size: 0.9rem; color: #9f1239; margin: 0;">
                                             <span class="material-symbols-outlined" style="font-size: 1rem; vertical-align: middle;">content_cut</span>
                                             Tambah Potongan
@@ -670,70 +456,35 @@
                                     </div>
                                     <div class="card-body" style="padding: 1rem;">
                                         <p style="font-size: 0.8rem; color: #881337; margin: 0 0 0.75rem 0;">Tambah potongan penjualan atau kasbon langsung dari sini tanpa perlu berpindah halaman.</p>
-                                        <button class="btn" onclick="openQuickPotonganModal()"
-                                            style="background: #f43f5e; color: white; width: 100%; height: 34px; font-size: 0.85rem;">
-                                            <span class="material-symbols-outlined" style="font-size: 18px;">add</span>
-                                            Tambah Potongan
+                                        <button class="btn" onclick="openQuickPotonganModal()"                                             style="background: #f43f5e; color: white; width: 100%; height: 34px; font-size: 0.85rem;"><span class="material-symbols-outlined" style="font-size: 18px;">add</span> Tambah Potongan
                                         </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                                    </div></div></div></div>
                     </div>
-
                     <div id="laporan-result">
                         <div class="text-center text-muted" style="padding: 3rem;">
                             Silakan pilih rentang tanggal dan klik "Lihat Laporan"
-                        </div>
-                    </div>
-                    <div class="card">
-                        <div class="card-header">
-                            <h2>Laporan Mingguan</h2>
-                        </div>
-                        <div class="card-body">
+                        </div></div>
+                    <div class="card"><div class="card-header"><h2>Laporan Mingguan</h2></div><div class="card-body">
                             <p>Loading laporan...</p>
-                        </div>
-                    </div>
-                </section>
-
+                        </div></div></section>
                 <!-- User Management Page -->
                 <section id="users" class="page">
                     <div class="card">
                         <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
                             <h2>Manajemen Akun</h2>
-                            <button class="btn btn-primary" onclick="openAddUserModal()">
-                                <span class="material-symbols-outlined">person_add</span> Tambah Akun
+                            <button class="btn btn-primary" onclick="openAddUserModal()"><span class="material-symbols-outlined">person_add</span> Tambah Akun
                             </button>
-                        </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
-                                <table class="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Nama</th>
-                                            <th>Email</th>
-                                            <th>Role</th>
-                                            <th>Dibuat</th>
-                                            <th>Aksi</th>
-                                        </tr>
+                        </div><div class="card-body"><div class="table-responsive"><table class="table"><thead>
+                                        <tr><th>Nama</th><th>Email</th><th>Role</th><th>Dibuat</th><th>Aksi</th></tr>
                                     </thead>
                                     <tbody id="users-table-body">
                                         <!-- Dynamic User List -->
                                     </tbody>
                                 </table>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        </main>
-    </div>
-
+                            </div></div></div></section>
+            </div></main></div>
     <!-- Modals Overlay -->
     <div class="modal-overlay" id="modal-overlay"></div>
-
- 
-
     <!-- Generic Modal Template (can be cloned or updated via JS) -->
     <div class="modal" id="form-modal">
         <div class="modal-header">
@@ -742,10 +493,7 @@
         </div>
         <div class="modal-body" id="modal-body-content">
             <!-- Dynamic Form Injection -->
-        </div>
-    </div>
-
-    <script src="script.js?v=3"></script>
+        </div></div>
+    <script type="module" src="script.js?v=4"></script>
 </body>
-
 </html>
