@@ -427,6 +427,14 @@
                                         <option value="Sebagian">Sebagian (Kurang Bayar)</option>
                                         <option value="Lunas">Lunas</option>
                                     </select>
+                                </div>
+                                <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 0.5rem; border-left: 1px solid var(--border-color); padding-left: 0.75rem;">
+                                    <button type="button" id="btn-pembayaran-masuk" class="btn btn-sm" style="background: #10b981; color: white; display: flex; align-items: center; gap: 0.3rem; white-space: nowrap; font-size: 0.8rem;" onclick="openIncomingPaymentsModal()" title="Lihat daftar pembayaran yang sudah masuk (sesuai filter periode &amp; pembeli)">
+                                        <span class="material-symbols-outlined" style="font-size: 16px;">account_balance_wallet</span> Pembayaran Masuk
+                                    </button>
+                                    <button type="button" id="btn-cetak-pembayaran-masuk-header" class="btn btn-sm" style="background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; display: flex; align-items: center; gap: 0.3rem; white-space: nowrap; font-size: 0.8rem;" onclick="printIncomingPayments()" title="Cetak daftar pembayaran masuk">
+                                        <span class="material-symbols-outlined" style="font-size: 16px;">print</span> Cetak
+                                    </button>
                                 </div></div>
                         </div><div class="card-body">
                             <div id="penagihan-content">
