@@ -439,8 +439,19 @@ export function saveComplexTransaction(data) {
     if (currentTxId) {
         const idx = data.transactions.findIndex(t => t.id === currentTxId);
         if (idx > -1) {
-            transaction.status = data.transactions[idx].status;
-            transaction.created_at = data.transactions[idx].created_at;
+            const old = data.transactions[idx];
+            transaction.created_at = old.created_at;
+            // Pertahankan data pembayaran yang sudah ada
+            transaction.payments = old.payments || [];
+            transaction.paidAmount = old.paidAmount || 0;
+            transaction.paid_amount = old.paidAmount || 0;
+            transaction.paidAt = old.paidAt || null;
+            transaction.paymentMethod = old.paymentMethod || null;
+            transaction.paymentNote = old.paymentNote || null;
+            // Hitung ulang status berdasarkan total baru
+            const info = window.getTransactionPaymentInfo ? window.getTransactionPaymentInfo(transaction) : null;
+            transaction.status = info ? info.status : old.status;
+            supabaseItem.status = transaction.status;
             data.transactions[idx] = transaction;
         }
         if (window.setCurrentEditTxId) window.setCurrentEditTxId(null);

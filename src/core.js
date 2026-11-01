@@ -18,6 +18,14 @@ export function getData() {
 let _isFetchingTurso = false;
 let _appInitialized = false;
 
+const safeJsonArray = (v) => {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string' && v.trim()) {
+        try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch (e) { return []; }
+    }
+    return [];
+};
+
 export async function fetchAllDataFromTurso() {
     if (_isFetchingTurso) return;
     _isFetchingTurso = true;
@@ -61,14 +69,14 @@ export async function fetchAllDataFromTurso() {
                 buyerId: t.buyerid, driverId: t.driverid,
                 totalAmount: t.totalamount, operationalExpense: t.operationalexpense,
                 retributionExpense: t.retributionexpense,
-                expenseDetails: typeof t.expenses === 'string' ? JSON.parse(t.expenses) : (t.expenses || []),
-                sales: typeof t.sales === 'string' ? JSON.parse(t.sales) : (t.sales || []),
+                expenseDetails: safeJsonArray(t.expenses),
+                sales: safeJsonArray(t.sales),
                 status: t.status || 'Belum Lunas',
                 paidAmount: t.paid_amount !== undefined && t.paid_amount !== null ? parseFloat(t.paid_amount) : (t.status === 'Lunas' ? (parseFloat(t.totalamount) || 0) : (parseFloat(t.paidAmount) || 0)),
                 paidAt: t.paid_at || t.paidAt || null,
                 paymentMethod: t.payment_method || t.paymentMethod || null,
                 paymentNote: t.payment_note || t.paymentNote || null,
-                payments: typeof t.payments === 'string' ? JSON.parse(t.payments) : (t.payments || [])
+                payments: safeJsonArray(t.payments)
             })),
             profiles: (data.profiles || []).map(p => ({ ...p, fullName: p.full_name })),
             solar: cleanSolar,
@@ -144,6 +152,30 @@ export const formatDate = (dateString = new Date()) => {
     const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     return new Date(dateString).toLocaleDateString('id-ID', options);
 };
+
+export function getWeekRange(dateStr) {
+    if (!dateStr) return { key: '9999-99-99', startDate: '', endDate: '', label: 'Lainnya' };
+    const parts = dateStr.split('-');
+    const dt = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    const day = dt.getDay();
+    const diffToMonday = dt.getDate() - (day === 0 ? 6 : day - 1);
+    const monday = new Date(dt.getFullYear(), dt.getMonth(), diffToMonday);
+    const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const toYMD = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    const startYMD = toYMD(monday);
+    const endYMD = toYMD(sunday);
+    const label = `${pad(monday.getDate())}/${pad(monday.getMonth() + 1)}/${monday.getFullYear()} - ${pad(sunday.getDate())}/${pad(sunday.getMonth() + 1)}/${sunday.getFullYear()}`;
+
+    return {
+        key: startYMD,
+        startDate: startYMD,
+        endDate: endYMD,
+        label
+    };
+}
 
 export function showToast(message, type = 'success') {
     let container = document.getElementById('toast-container');

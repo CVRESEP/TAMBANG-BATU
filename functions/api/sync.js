@@ -42,6 +42,35 @@ export async function onRequestGet(context) {
     }
 }
 
+const ALLOWED_TABLES = new Set([
+    'buyers', 'drivers', 'expense_types', 'settlements', 'deductions',
+    'transactions', 'profiles', 'solar', 'solar_suppliers', 'solar_overrides'
+]);
+const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+// Kolom tambahan yang dibutuhkan fitur penagihan
+const TX_PAYMENT_COLUMNS = {
+    payments: "TEXT DEFAULT '[]'",
+    paid_amount: 'REAL DEFAULT 0',
+    paid_at: 'TEXT',
+    payment_method: 'TEXT',
+    payment_note: 'TEXT',
+    status: "TEXT DEFAULT 'Belum Lunas'"
+};
+
+let _txColumnsChecked = false;
+async function ensureTransactionColumns(client) {
+    if (_txColumnsChecked) return;
+    const info = await client.execute("PRAGMA table_info(transactions)");
+    const existing = new Set(info.rows.map(r => String(r.name).toLowerCase()));
+    for (const [col, def] of Object.entries(TX_PAYMENT_COLUMNS)) {
+        if (!existing.has(col)) {
+            await client.execute(`ALTER TABLE transactions ADD COLUMN ${col} ${def}`);
+        }
+    }
+    _txColumnsChecked = true;
+}
+
 export async function onRequestPost(context) {
     const { env, request } = context;
     const client = createClient({
@@ -53,26 +82,42 @@ export async function onRequestPost(context) {
         const body = await request.json();
         const { table, item } = body;
 
-        if (!table || !item) {
-            return new Response("Missing table or item", { status: 400 });
+        if (!table || !item || item.id === undefined || item.id === null) {
+            return new Response(JSON.stringify({ error: "Missing table, item, or item.id" }), { status: 400 });
+        }
+        if (!ALLOWED_TABLES.has(table)) {
+            return new Response(JSON.stringify({ error: `Invalid table: ${table}` }), { status: 400 });
         }
 
-        // Build the columns and values dynamically
-        const columns = Object.keys(item);
-        const placeholders = columns.map(() => '?').join(', ');
-        const values = Object.values(item).map(v => typeof v === 'object' && v !== null ? JSON.stringify(v) : v);
-        
-        // For upsert we use ON CONFLICT (id) DO UPDATE SET ...
-        const updateClause = columns.filter(c => c !== 'id').map(c => `${c} = excluded.${c}`).join(', ');
-        
-        let query = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
-        if (updateClause.length > 0) {
-            query += ` ON CONFLICT (id) DO UPDATE SET ${updateClause}`;
-        } else {
-            query += ` ON CONFLICT (id) DO NOTHING`; // Or handle edge case where table only has ID
+        const columns = Object.keys(item).filter(c => item[c] !== undefined);
+        if (columns.some(c => !IDENT_RE.test(c))) {
+            return new Response(JSON.stringify({ error: "Invalid column name" }), { status: 400 });
         }
 
-        await client.execute({ sql: query, args: values });
+        if (table === 'transactions') {
+            await ensureTransactionColumns(client);
+        }
+
+        const toVal = v => (typeof v === 'object' && v !== null) ? JSON.stringify(v) : v;
+        const updateCols = columns.filter(c => c !== 'id');
+
+        // 1) Coba UPDATE dulu — mendukung update parsial (mis. hanya kolom pembayaran)
+        let affected = 0;
+        if (updateCols.length > 0) {
+            const res = await client.execute({
+                sql: `UPDATE ${table} SET ${updateCols.map(c => `${c} = ?`).join(', ')} WHERE id = ?`,
+                args: [...updateCols.map(c => toVal(item[c])), item.id]
+            });
+            affected = res.rowsAffected || 0;
+        }
+
+        // 2) Jika belum ada, INSERT baris baru
+        if (affected === 0) {
+            await client.execute({
+                sql: `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')}) ON CONFLICT (id) DO NOTHING`,
+                args: columns.map(c => toVal(item[c]))
+            });
+        }
 
         return new Response(JSON.stringify({ success: true }), {
             headers: { 'Content-Type': 'application/json' },

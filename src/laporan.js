@@ -170,11 +170,12 @@ window.render_laporan = () => {
                 .period-table { width: 100%; border: 2px solid #000; border-collapse: collapse; margin-bottom: 20px; }
                 .period-table td { border: 1px solid #000; padding: 5px 10px; font-weight: bold; text-align: center; }
                 .bg-blue { background-color: #4472c4; color: #fff; }
-                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+                .data-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; page-break-inside: avoid; break-inside: avoid; }
                 .data-table th { border-top: 2px solid #000; border-bottom: 2px solid #000; padding: 5px 8px; text-align: left; font-size: 13px; font-weight: bold; }
                 .data-table td { padding: 4px 8px; font-size: 13px; }
+                .data-table tr { page-break-inside: avoid; break-inside: avoid; }
                 .summary-row td { border-top: 2px solid #000; border-bottom: 2px solid #000; font-weight: bold; padding: 8px; }
-                .net-profit-box { border: 2px solid #000; font-weight: bold; font-size: 15px; display: flex; justify-content: space-between; padding: 10px; margin-top: 5px; }
+                .net-profit-box { border: 2px solid #000; font-weight: bold; font-size: 15px; display: flex; justify-content: space-between; padding: 10px; margin-top: 5px; page-break-inside: avoid; break-inside: avoid; }
                 .text-right { text-align: right !important; }
                 .text-center { text-align: center !important; }
                 .potongan-page { break-before: page; margin-top: 40px; border-top: 1px dashed #ccc; padding-top: 40px; }
@@ -182,6 +183,7 @@ window.render_laporan = () => {
                 @media print {
                     .no-print { display: none !important; }
                     .report-body { padding: 0; width: 100%; max-width: none; border: none; }
+                    .data-table, .data-table tr, .net-profit-box { page-break-inside: avoid; break-inside: avoid; }
                     .potongan-page { border-top: none; break-before: page; page-break-before: always; margin-top: 0; padding-top: 15px; }
                     @page { margin: 8mm 10mm; size: 210mm 330mm; }
                 }

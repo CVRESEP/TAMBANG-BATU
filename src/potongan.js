@@ -93,15 +93,15 @@ function renderPotonganTable(data, start, end) {
         filtered = filtered.filter(p => { const pStart = p.dateStart || p.date; const pEnd = p.dateEnd || p.date; return pStart <= end && pEnd >= start; });
     }
     filtered.sort((a, b) => new Date(b.dateStart || b.date) - new Date(a.dateStart || a.date));
-    tbody.innerHTML = filtered.length === 0 ? '<tr><td colspan="6" class="text-center">Tidak ada data potongan</td></tr>' :
+    tbody.innerHTML = filtered.length === 0 ? '<tr><td colspan="7" class="text-center">Tidak ada data potongan</td></tr>' :
         filtered.map(p => {
             const buyer = data.buyers.find(b => b.id === p.buyerId);
-            const dateStr = p.dateStart && p.dateEnd ? `${formatDate(p.dateStart)} - ${formatDate(p.dateEnd)}` : formatDate(p.date);
             return `<tr>
                 <td><input type="checkbox" class="check-potongan" data-id="${p.id}"></td>
-                <td>${dateStr}</td>
-                <td>${p.description || '-'}</td>
-                <td>${buyer ? buyer.name : '-'}</td>
+                <td>${formatDate(p.dateStart || p.date)}</td>
+                <td>${formatDate(p.dateEnd || p.date)}</td>
+                <td><span class="badge" style="background:#fef3c7;color:#d97706">${p.jenis || 'Potongan Penjualan'}</span></td>
+                <td>${p.description || '-'} ${buyer ? `<span style="color:#64748b;font-size:0.85em;">(${buyer.name})</span>` : ''}</td>
                 <td style="font-weight:600;color:var(--danger);">${formatCurrency(p.amount)}</td>
                 <td>
                     <div class="d-flex" style="gap:0.5rem">
@@ -113,7 +113,7 @@ function renderPotonganTable(data, start, end) {
         }).join('');
 }
 
-document.getElementById('btn-add-setoran')?.addEventListener('click', () => {
+function openSetoranModal() {
     currentEditId = null;
     const data = getData();
     const sortedTypes = [...data.expenseTypes].sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -125,6 +125,13 @@ document.getElementById('btn-add-setoran')?.addEventListener('click', () => {
         </form>`;
     window.openModal('Tambah Jenis Setoran', formHtml);
     document.getElementById('form-setoran').addEventListener('submit', (e) => { e.preventDefault(); saveSetoran(); });
+}
+window.openSetoranModal = openSetoranModal;
+
+document.getElementById('btn-add-setoran')?.addEventListener('click', openSetoranModal);
+document.getElementById('btn-add-setoran-2')?.addEventListener('click', openSetoranModal);
+document.getElementById('btn-add-potongan')?.addEventListener('click', () => {
+    if (window.openAddPotonganModal) window.openAddPotonganModal();
 });
 
 export function saveSetoran() {

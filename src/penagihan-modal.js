@@ -2,7 +2,15 @@
 // src/penagihan-modal.js — Modal Pembayaran, Alokasi & Riwayat
 // ============================================================
 import { getData, saveData, generateId, formatCurrency, formatDate, showToast } from './core.js';
-import { getTransactionPaymentInfo } from './penagihan.js';
+import { getTransactionPaymentInfo, buildTxPaymentUpdate } from './penagihan.js';
+
+const readPayments = (tx) => {
+    if (Array.isArray(tx.payments)) return [...tx.payments];
+    if (typeof tx.payments === 'string' && tx.payments.trim()) {
+        try { const p = JSON.parse(tx.payments); return Array.isArray(p) ? p : []; } catch (e) { return []; }
+    }
+    return [];
+};
 
 window.openPaymentModal = (txId, buyerId) => {
     const data = getData();
@@ -56,28 +64,15 @@ window.openPaymentModal = (txId, buyerId) => {
         const note = document.getElementById('pay-note').value;
 
         if (amount <= 0) return;
-
-        let payments = [];
-        if (Array.isArray(tx.payments)) payments = [...tx.payments];
-        else if (typeof tx.payments === 'string') {
-            try { payments = JSON.parse(tx.payments) || []; } catch (err) {}
+        if (amount > payInfo.remaining + 0.5) {
+            showToast('Jumlah bayar melebihi sisa tagihan!', 'error');
+            return;
         }
 
-        const paymentEntry = { id: generateId(), date, amount, method, note, created_at: new Date().toISOString() };
-        payments.push(paymentEntry);
+        const payments = readPayments(tx);
+        payments.push({ id: generateId(), buyerId, date, amount, method, note, created_at: new Date().toISOString() });
 
-        const newPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-        tx.payments = payments;
-        tx.paidAmount = newPaid;
-        tx.paid_amount = newPaid;
-        tx.status = (newPaid >= payInfo.total - 0.5) ? 'Lunas' : 'Sebagian';
-
-        saveData(data, 'transactions', {
-            id: tx.id,
-            payments: JSON.stringify(payments),
-            paid_amount: newPaid,
-            status: tx.status
-        });
+        await saveData(data, 'transactions', buildTxPaymentUpdate(tx, payments));
 
         window.closeModal();
         window.render_penagihan();
@@ -180,33 +175,20 @@ window.openBulkPaymentAllocationModal = (buyerId) => {
         const method = document.getElementById('bulk-pay-method').value;
         const inputs = document.querySelectorAll('.bulk-alloc-input');
 
+        const saves = [];
         inputs.forEach(inp => {
             const alloc = parseFloat(inp.value) || 0;
             if (alloc > 0) {
                 const txId = inp.getAttribute('data-txid');
                 const tx = data.transactions.find(t => t.id === txId);
                 if (tx) {
-                    let payments = [];
-                    if (Array.isArray(tx.payments)) payments = [...tx.payments];
-                    else if (typeof tx.payments === 'string') {
-                        try { payments = JSON.parse(tx.payments) || []; } catch (err) {}
-                    }
-                    payments.push({ id: generateId(), date: payDate, amount: alloc, method, note: 'Alokasi Bayar Sekaligus' });
-                    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-                    tx.payments = payments;
-                    tx.paidAmount = totalPaid;
-                    const payInfo = getTransactionPaymentInfo(tx, buyerId);
-                    tx.status = (totalPaid >= payInfo.total - 0.5) ? 'Lunas' : 'Sebagian';
-
-                    saveData(data, 'transactions', {
-                        id: tx.id,
-                        payments: JSON.stringify(payments),
-                        paid_amount: totalPaid,
-                        status: tx.status
-                    });
+                    const payments = readPayments(tx);
+                    payments.push({ id: generateId(), buyerId, date: payDate, amount: alloc, method, note: 'Alokasi Bayar Sekaligus', created_at: new Date().toISOString() });
+                    saves.push(saveData(data, 'transactions', buildTxPaymentUpdate(tx, payments)));
                 }
             }
         });
+        await Promise.all(saves);
 
         window.closeModal();
         window.render_penagihan();
@@ -219,11 +201,7 @@ window.openPaymentHistoryModal = (txId, buyerId) => {
     const tx = data.transactions.find(t => t.id === txId);
     if (!tx) return;
 
-    let payments = [];
-    if (Array.isArray(tx.payments)) payments = tx.payments;
-    else if (typeof tx.payments === 'string') {
-        try { payments = JSON.parse(tx.payments) || []; } catch (err) {}
-    }
+    const payments = getTransactionPaymentInfo(tx, buyerId).payments;
 
     const contentHtml = `
         <div style="padding:0.5rem;">
@@ -259,16 +237,8 @@ window.deletePaymentEntry = async (txId, paymentId, buyerId) => {
     const tx = data.transactions.find(t => t.id === txId);
     if (!tx) return;
 
-    let payments = Array.isArray(tx.payments) ? tx.payments : JSON.parse(tx.payments || '[]');
-    payments = payments.filter(p => p.id !== paymentId);
-
-    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-    tx.payments = payments;
-    tx.paidAmount = totalPaid;
-    const payInfo = getTransactionPaymentInfo(tx, buyerId);
-    tx.status = totalPaid === 0 ? 'Belum Lunas' : (totalPaid >= payInfo.total - 0.5 ? 'Lunas' : 'Sebagian');
-
-    saveData(data, 'transactions', { id: tx.id, payments: JSON.stringify(payments), paid_amount: totalPaid, status: tx.status });
+    let payments = readPayments(tx).filter(p => p.id !== paymentId);
+    await saveData(data, 'transactions', buildTxPaymentUpdate(tx, payments));
     window.closeModal();
     window.render_penagihan();
     showToast('Entri pembayaran berhasil dihapus.');
@@ -280,10 +250,8 @@ window.cancelPayment = async (txId) => {
     const tx = data.transactions.find(t => t.id === txId);
     if (!tx) return;
 
-    tx.payments = [];
-    tx.paidAmount = 0;
     tx.status = 'Belum Lunas';
-    saveData(data, 'transactions', { id: tx.id, payments: '[]', paid_amount: 0, status: 'Belum Lunas' });
+    await saveData(data, 'transactions', buildTxPaymentUpdate(tx, []));
     window.render_penagihan();
     showToast('Pembayaran dibatalkan.');
 };

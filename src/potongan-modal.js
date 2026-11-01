@@ -199,6 +199,66 @@ window.saveBulkPotongan = async () => {
     showToast(`Berhasil menyimpan ${added} data potongan.`);
 };
 
+export function openAddPotonganModal() {
+    currentEditId = null;
+    const data = getData();
+    const today = new Date().toISOString().split('T')[0];
+    const filterStart = document.getElementById('filter-potongan-start')?.value || today;
+    const filterEnd = document.getElementById('filter-potongan-end')?.value || today;
+
+    const buyerOptions = (data.buyers || []).map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+
+    const formHtml = `
+        <form id="form-potongan" autocomplete="off">
+            <div class="form-group">
+                <label>Jenis Potongan</label>
+                <select id="potongan-jenis" class="form-control" required>
+                    <option value="Potongan Penjualan" selected>Potongan Penjualan</option>
+                    <option value="Kasbon">Kasbon</option>
+                    <option value="Denda">Denda</option>
+                    <option value="Lainnya">Lainnya</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Pilih Pembeli (Opsional)</label>
+                <select id="potongan-buyer-id" class="form-control">
+                    <option value="">-- Tidak Terkait Pembeli Spesifik --</option>
+                    ${buyerOptions}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Keterangan</label>
+                <input type="text" id="potongan-desc" class="form-control" placeholder="Contoh: Potongan Penjualan / Kasbon..." required>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem">
+                <div class="form-group">
+                    <label>Dari Tanggal</label>
+                    <input type="date" id="potongan-date-start" class="form-control" value="${filterStart}" required>
+                </div>
+                <div class="form-group">
+                    <label>Sampai Tanggal</label>
+                    <input type="date" id="potongan-date-end" class="form-control" value="${filterEnd}" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Jumlah Potongan (Rp)</label>
+                <input type="number" id="potongan-amount" class="form-control" placeholder="0" required>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModal()">Batal</button>
+                <button type="submit" class="btn btn-primary">Simpan</button>
+            </div>
+        </form>
+    `;
+    window.openModal('Tambah Potongan', formHtml);
+    document.getElementById('form-potongan').addEventListener('submit', (e) => {
+        e.preventDefault();
+        window.savePotongan();
+    });
+}
+window.openAddPotonganModal = openAddPotonganModal;
+window.openAddPotongan = openAddPotonganModal;
+
 window.openAddPotonganForBuyer = (buyerId, date) => {
     currentEditId = null;
     const data = getData();
@@ -353,8 +413,10 @@ window.savePotongan = () => {
     };
 
     saveData(data, 'deductions', supabaseItem);
+    currentEditId = null;
     window.closeModal();
     window.render_potongan();
+    showToast('Data potongan berhasil disimpan.');
 };
 
 window.openQuickPotonganModal = () => {
