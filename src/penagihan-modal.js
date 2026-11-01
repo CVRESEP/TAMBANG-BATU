@@ -358,12 +358,14 @@ function readSales(tx) {
     return [];
 }
 
-function buildIncomingTable(rows, total, forPrint = false) {
+function buildIncomingTable(rows, total, forPrint = false, opts = {}) {
+    const startIndex = opts.startIndex || 0;
+    const showTotal = opts.showTotal !== false;
     const th = forPrint ? 'border:1px solid #94a3b8; background:#e2e8f0; padding:6px 8px; text-align:left;' : '';
     const td = forPrint ? 'border:1px solid #cbd5e1; padding:5px 8px;' : '';
     const body = rows.length ? rows.map((r, i) => `
         <tr>
-            <td style="${td}">${i + 1}</td>
+            <td style="${td}">${startIndex + i + 1}</td>
             <td style="${td}">${formatDate(r.date)}</td>
             <td style="${td}">${escHtml(r.buyer)}</td>
             <td style="${td}">${escHtml(r.txLabel)}</td>
@@ -380,10 +382,10 @@ function buildIncomingTable(rows, total, forPrint = false) {
                 <th style="${th} text-align:right;">Jumlah</th>
             </tr></thead>
             <tbody>${body}</tbody>
-            <tfoot><tr style="font-weight:700;">
+            ${showTotal ? `<tfoot><tr style="font-weight:700;">
                 <td colspan="6" style="${td} text-align:right;">Total Pembayaran Masuk</td>
                 <td style="${td} text-align:right; color:#059669; white-space:nowrap;">${formatCurrency(total)}</td>
-            </tr></tfoot>
+            </tr></tfoot>` : ''}
         </table>`;
 }
 
@@ -489,6 +491,9 @@ window.openIncomingPaymentsModal = () => {
             <div id="incoming-results"></div>
             <div class="form-actions" style="margin-top:1.25rem;">
                 <button type="button" class="btn" onclick="closeModal()">Tutup</button>
+                <button type="button" id="btn-export-pdf-pembayaran-masuk" class="btn" style="background:#ef4444; color:white;" onclick="exportIncomingPaymentsPDF()">
+                    <span class="material-symbols-outlined" style="font-size:16px; vertical-align:middle;">picture_as_pdf</span> Export PDF
+                </button>
                 <button type="button" id="btn-cetak-pembayaran-masuk" class="btn btn-primary" onclick="printIncomingPayments(true)">
                     <span class="material-symbols-outlined" style="font-size:16px; vertical-align:middle;">print</span> Cetak
                 </button>
@@ -530,4 +535,67 @@ window.printIncomingPayments = (useModalFilter = false) => {
         frame.contentWindow.print();
         setTimeout(() => frame.remove(), 1500);
     }, 250);
+};
+
+// Export PDF (memakai filter yang sedang aktif di modal)
+window.exportIncomingPaymentsPDF = async () => {
+    const { rows, periodText, buyerText, total } = collectIncomingPayments();
+    if (rows.length === 0) { showToast('Tidak ada pembayaran untuk diexport.', 'error'); return; }
+
+    const jsPDFClass = (window.jspdf && window.jspdf.jsPDF) ? window.jspdf.jsPDF : window.jsPDF;
+    if (!jsPDFClass || typeof html2canvas === 'undefined') {
+        showToast('Pustaka PDF (jsPDF / html2canvas) belum siap.', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btn-export-pdf-pembayaran-masuk');
+    const origBtn = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px; vertical-align:middle; animation: spin 1s linear infinite;">sync</span> Menyiapkan...'; }
+
+    const mount = document.createElement('div');
+    mount.style.cssText = `position:fixed; left:0; top:0; width:1100px; background:#fff; color:#1e293b; padding:24px 28px; box-sizing:border-box; font-family:'Inter', Arial, sans-serif; font-size:12px; z-index:999999; pointer-events:none;`;
+    document.body.appendChild(mount);
+
+    const pdf = new jsPDFClass({ unit: 'mm', format: 'a4', orientation: 'landscape' });
+    const marginX = 10, marginY = 10;
+    const printableWidth = 297 - marginX * 2;
+    const maxPrintableHeight = 210 - marginY * 2;
+
+    const ROWS_PER_PAGE = 16;
+    const chunks = [];
+    for (let i = 0; i < rows.length; i += ROWS_PER_PAGE) chunks.push(rows.slice(i, i + ROWS_PER_PAGE));
+    const printedAt = formatDate(new Date().toISOString().slice(0, 10));
+
+    try {
+        for (let c = 0; c < chunks.length; c++) {
+            const isLast = c === chunks.length - 1;
+            mount.innerHTML = `
+                <div style="margin-bottom:12px;">
+                    <div style="font-size:20px; font-weight:700;">Laporan Pembayaran Masuk</div>
+                    <div style="color:#475569; line-height:1.6; margin-top:4px;">${escHtml(periodText)}<br>Pembeli: ${escHtml(buyerText)}<br>Dicetak: ${printedAt} &nbsp;|&nbsp; Halaman ${c + 1} / ${chunks.length}</div>
+                </div>
+                ${buildIncomingTable(chunks[c], total, true, { startIndex: c * ROWS_PER_PAGE, showTotal: isLast })}`;
+            await new Promise(r => setTimeout(r, 80));
+
+            const canvas = await html2canvas(mount, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, x: 0, y: 0, width: 1100 });
+
+            if (c > 0) pdf.addPage('a4', 'landscape');
+            let w = printableWidth;
+            let h = (canvas.height * w) / canvas.width;
+            if (h > maxPrintableHeight) {
+                const ratio = maxPrintableHeight / h;
+                w *= ratio;
+                h = maxPrintableHeight;
+            }
+            pdf.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', marginX + (printableWidth - w) / 2, marginY, w, h);
+        }
+        pdf.save(`Pembayaran_Masuk_${new Date().toISOString().slice(0, 10)}.pdf`);
+        showToast('PDF berhasil dibuat.');
+    } catch (err) {
+        console.error('Gagal export PDF:', err);
+        showToast('Gagal export PDF: ' + (err.message || err), 'error');
+    } finally {
+        if (mount.parentNode) mount.parentNode.removeChild(mount);
+        if (btn) { btn.disabled = false; btn.innerHTML = origBtn; }
+    }
 };
